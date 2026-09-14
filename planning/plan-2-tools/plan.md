@@ -231,7 +231,7 @@ last_update:     2026-09-14T00:00:00Z
 | Sub-phase | State | Skill ID(s) | Note |
 |---|---|---|---|
 | 1.1 ToolResult & helpers | done | mcp-tool-builder, strict-typing-contracts, tdd-test-runner, lint-formatting | helpers populate tool_name/duration_ms, frozen fields verified |
-| 1.2 BaseTool ABC | pending | — | — |
+| 1.2 BaseTool ABC | done | mcp-tool-builder, strict-typing-contracts, tdd-test-runner | ABC frozen contract, defaults verified |
 | 1.3 Execution wrapper R1/R2/R4/R5 | pending | — | — |
 | 1.4 ToolRegistry | pending | — | — |
 | 1.5 Shared test doubles & fixtures | pending | — | — |
@@ -260,6 +260,7 @@ last_update:     2026-09-14T00:00:00Z
 | Timestamp (ISO) | Sub-phase | Files | Skill ID(s) | Change summary | Gates passed |
 |---|---|---|---|---|---|
 | 2026-09-14T13:55:00Z | 1.1 | agent_harness/tools/base.py, agent_harness/tools/__init__.py, tests/test_tools/test_toolresult.py | mcp-tool-builder, strict-typing-contracts, tdd-test-runner, lint-formatting | Implement ToolResult per SPEC-001 §2.3 and ok/fail helpers with R4 defaults | tests, ruff, mypy |
+| 2026-09-14T13:56:00Z | 1.2 | agent_harness/tools/base.py, agent_harness/tools/__init__.py, tests/test_tools/test_basetools.py | mcp-tool-builder, strict-typing-contracts, tdd-test-runner | Implement BaseTool ABC per SPEC-002 §1 with R1-R8 docstring | tests, ruff, mypy |
 | — | — | — | — | _no source changes permitted yet_ | — |
 
 ### Spec/Skill Change Requests
