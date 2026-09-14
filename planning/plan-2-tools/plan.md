@@ -249,7 +249,7 @@ last_update:     2026-09-14T00:00:00Z
 | 4.2 Path-safety guard | done | threat-model-sast, auth-security, tdd-test-runner | traversal, symlink, roots-enumerated tests verified |
 | 4.3 file_write | done | mcp-tool-builder, tdd-test-runner, auth-security | atomic via temp+replace, parents/create_dirs, output_dir enforcement |
 | 4.4 csv_process | done | mcp-tool-builder, tdd-test-runner | op chain, error index, output_path verified |
-| 4.5 pdf_export degraded | pending | — | — |
+| 4.5 pdf_export degraded | done | mcp-tool-builder, tdd-test-runner | degraded fallback to .md, wkhtmltopdf detection, output_dir creation |
 | 5.1 llm_extract | pending | — | — |
 | 5.2 llm_synthesize | pending | — | — |
 | 5.3 default_tools bundle | pending | — | — |
@@ -278,6 +278,7 @@ last_update:     2026-09-14T00:00:00Z
 | 2026-09-14T14:11:00Z | 4.2 | agent_harness/tools/_paths.py, agent_harness/tools/file_read.py, tests/test_tools/test_path_safety.py | threat-model-sast, auth-security, tdd-test-runner | Implement shared path-safety guard with workspace/output_dir/allowed_paths | tests, ruff, mypy |
 | 2026-09-14T14:12:00Z | 4.3 | agent_harness/tools/file_write.py, tests/test_tools/test_file_write.py | mcp-tool-builder, tdd-test-runner, auth-security | Implement file_write per SPEC-002 §3.5 with atomic replace and path guard | tests, ruff, mypy |
 | 2026-09-14T14:13:00Z | 4.4 | agent_harness/tools/csv_process.py, tests/test_tools/test_csv_process.py | mcp-tool-builder, tdd-test-runner | Implement csv_process per SPEC-002 §3.9 with 7 ops | tests, ruff, mypy |
+| 2026-09-14T14:14:00Z | 4.5 | agent_harness/tools/pdf_export.py, tests/test_tools/test_pdf_export.py | mcp-tool-builder, tdd-test-runner | Implement pdf_export per SPEC-002 §3.8 with degraded markdown | tests, ruff, mypy |
 | — | — | — | — | _no source changes permitted yet_ | — |
 
 ### Spec/Skill Change Requests
