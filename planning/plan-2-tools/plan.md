@@ -239,7 +239,7 @@ last_update:     2026-09-14T00:00:00Z
 | 2.2 web_search tool | done | mcp-tool-builder, tdd-test-runner, strict-typing-contracts | empty-result flag, normalized output, retryable errors |
 | 2.3 web_scrape tool | done | mcp-tool-builder, tdd-test-runner, strict-typing-contracts | HTML fixture, selector, truncation, timeout retryable |
 | 2.4 Network failure classification | done | mcp-tool-builder, tdd-test-runner, threat-model-sast | timeout/429/5xx retryable, 4xx/DNS not, messages include code/URL |
-| 2.5 Retrieval tool hardening | pending | — | — |
+| 2.5 Retrieval tool hardening | done | mcp-tool-builder, tdd-test-runner, strict-typing-contracts, threat-model-sast | coverage 89%, ruff/mypy clean, deterministic ordering |
 | 3.1 CodeSandbox core S3/S4/S5/S6/S8 | pending | — | — |
 | 3.2 Static analysis S1/S2/S7 | pending | — | — |
 | 3.3 code_execute surface | pending | — | — |
@@ -268,6 +268,7 @@ last_update:     2026-09-14T00:00:00Z
 | 2026-09-14T14:01:00Z | 2.2 | agent_harness/tools/web_search.py, tests/test_tools/test_web_search.py | mcp-tool-builder, strict-typing-contracts, tdd-test-runner | Implement web_search I/O contract per SPEC-002 §3.1 | tests, ruff, mypy |
 | 2026-09-14T14:02:00Z | 2.3 | agent_harness/tools/web_scrape.py, tests/test_tools/test_web_scrape.py | mcp-tool-builder, tdd-test-runner, strict-typing-contracts | Implement web_scrape per SPEC-002 §3.2 (BeautifulSoup, timeout, UA) | tests, ruff, mypy |
 | 2026-09-14T14:03:00Z | 2.4 | agent_harness/tools/web_search.py, agent_harness/tools/web_scrape.py, tests/test_tools/test_network_classification.py | mcp-tool-builder, threat-model-sast, tdd-test-runner | Map provider/HTTP errors to retryable with LLM-friendly messages | tests, ruff, mypy |
+| 2026-09-14T14:04:00Z | 2.5 | agent_harness/tools/web_search.py, agent_harness/tools/web_scrape.py, tests/test_tools/test_retrieval_hardening.py | mcp-tool-builder, tdd-test-runner, strict-typing-contracts, threat-model-sast | Harden retrieval tools: validation, caps, ordering, coverage ≥80% | tests, ruff, mypy |
 | — | — | — | — | _no source changes permitted yet_ | — |
 
 ### Spec/Skill Change Requests
