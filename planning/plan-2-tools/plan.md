@@ -270,6 +270,7 @@ last_update:     2026-09-14T00:00:00Z
 | 2026-09-14T14:03:00Z | 2.4 | agent_harness/tools/web_search.py, agent_harness/tools/web_scrape.py, tests/test_tools/test_network_classification.py | mcp-tool-builder, threat-model-sast, tdd-test-runner | Map provider/HTTP errors to retryable with LLM-friendly messages | tests, ruff, mypy |
 | 2026-09-14T14:04:00Z | 2.5 | agent_harness/tools/web_search.py, agent_harness/tools/web_scrape.py, tests/test_tools/test_retrieval_hardening.py | mcp-tool-builder, tdd-test-runner, strict-typing-contracts, threat-model-sast | Harden retrieval tools: validation, caps, ordering, coverage ≥80% | tests, ruff, mypy |
 | 2026-09-14T14:05:00Z | 3.1 | agent_harness/tools/code_execute.py, tests/test_tools/test_code_sandbox.py | threat-model-sast, auth-security, tdd-test-runner | Implement S3/S4/S5/S6/S8 sandbox core with env-leak and timeout tests | tests, ruff, mypy |
+| 2026-09-14T14:06:00Z | 3.2 | agent_harness/tools/code_execute.py, tests/test_tools/test_code_static_analysis.py | threat-model-sast, auth-security, tdd-test-runner | Implement S1/S2/S7 pre-execution rejection pipeline | tests, ruff, mypy |
 | — | — | — | — | _no source changes permitted yet_ | — |
 
 ### Spec/Skill Change Requests

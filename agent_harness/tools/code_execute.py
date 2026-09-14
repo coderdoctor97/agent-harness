@@ -5,6 +5,7 @@ Spec: SPEC-002 §3.3, SPEC-006 §4 S3/S4/S5/S6/S8
 
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
 import sys
@@ -28,6 +29,115 @@ BLOCKED_PATTERNS: list[str] = [
     "ctypes",
     "__subclasses__",
 ]
+
+# S2/S7 blocked imports and calls
+BLOCKED_IMPORTS: set[str] = {
+    "subprocess",
+    "ctypes",
+    "socket",
+    "shutil",
+    "multiprocessing",
+    "importlib",
+}
+
+NETWORK_MODULES: set[str] = {
+    "socket",
+    "urllib.request",
+    "http.client",
+    "requests",
+    "httpx",
+    "urllib",
+    "http",
+}
+
+BLOCKED_CALLS: set[str] = {"eval", "exec", "compile", "__import__"}
+
+DUNDER_ATTRS: set[str] = {
+    "__globals__",
+    "__subclasses__",
+    "__builtins__",
+    "__dict__",
+    "__class__",
+}
+
+
+def _check_blocked_patterns(code: str) -> str | None:
+    """S1 — check verbatim blocked patterns.
+
+    Returns matched pattern or None.
+    Spec: SPEC-006 §4 S1
+    """
+    for pat in BLOCKED_PATTERNS:
+        if pat in code:
+            return pat
+    return None
+
+
+def _check_ast(code: str, network_in_code: bool = False) -> str | None:
+    """S2/S7 — AST analysis for blocked imports/calls/dunder.
+
+    Returns violation description or None.
+    Spec: SPEC-006 §4 S2/S7
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        # Syntax errors are not sandbox violations; let execution handle
+        return None
+
+    for node in ast.walk(tree):
+        # Check imports
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                mod = alias.name.split(".")[0]
+                full = alias.name
+                if mod in BLOCKED_IMPORTS or full in BLOCKED_IMPORTS:
+                    return f"Blocked import: {alias.name}"
+                if not network_in_code and (
+                    full in NETWORK_MODULES or mod in NETWORK_MODULES
+                ):
+                    return f"Blocked network import: {alias.name}"
+        elif isinstance(node, ast.ImportFrom):
+            mod = node.module or ""
+            top = mod.split(".")[0] if mod else ""
+            if top in BLOCKED_IMPORTS or mod in BLOCKED_IMPORTS:
+                return f"Blocked import: {mod}"
+            if not network_in_code and (
+                mod in NETWORK_MODULES or top in NETWORK_MODULES
+            ):
+                return f"Blocked network import: {mod}"
+        # Check calls to eval/exec/compile/__import__
+        elif isinstance(node, ast.Call):
+            # Direct calls like eval(...)
+            if isinstance(node.func, ast.Name) and node.func.id in BLOCKED_CALLS:
+                return f"Blocked call: {node.func.id}"
+            # Also check attribute calls? Not needed per spec
+        # Check dunder attribute access
+        elif isinstance(node, ast.Attribute):
+            if node.attr in DUNDER_ATTRS:
+                return f"Blocked dunder access: {node.attr}"
+            # Also check for any dunder-like attr
+            if node.attr.startswith("__") and node.attr.endswith("__"):
+                # Be conservative: block any dunder if it's in blocked set, already handled
+                # So only block the specific ones above; but spec says dunder attributes
+                # We'll block any __*__ that is not normal? Safer to only block listed.
+                pass
+        # Also check for Subscript with dunder? Not needed
+    return None
+
+
+def check_code_safety(code: str, *, network_in_code: bool = False) -> tuple[bool, str]:
+    """Combine S1/S2/S7 checks.
+
+    Returns (is_safe, violation_message). If not safe, message describes violation.
+    """
+    pat = _check_blocked_patterns(code)
+    if pat is not None:
+        return False, f"Blocked pattern detected: {pat}"
+    ast_violation = _check_ast(code, network_in_code=network_in_code)
+    if ast_violation is not None:
+        return False, f"Blocked AST construct: {ast_violation}"
+    return True, ""
 
 
 def _scrubbed_env() -> dict[str, str]:
