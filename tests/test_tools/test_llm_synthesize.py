@@ -20,7 +20,6 @@ def test_llm_synthesize_basic() -> None:
 
 def test_llm_synthesize_source_step_results() -> None:
     llm = FakeLLMClient(responses=["synthesized"])
-    tool = LlmSynthesizeTool(llm_client=llm)
     ctx = {"step_results": {"step_1": {"output": "result one"}}, "llm_client": llm}
     # Use tool without constructor client, via context
     tool2 = LlmSynthesizeTool()

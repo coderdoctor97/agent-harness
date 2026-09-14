@@ -241,7 +241,7 @@ last_update:     2026-09-14T00:00:00Z
 | 2.4 Network failure classification | done | mcp-tool-builder, tdd-test-runner, threat-model-sast | timeout/429/5xx retryable, 4xx/DNS not, messages include code/URL |
 | 2.5 Retrieval tool hardening | done | mcp-tool-builder, tdd-test-runner, strict-typing-contracts, threat-model-sast | coverage 89%, ruff/mypy clean, deterministic ordering |
 | 3.1 CodeSandbox core S3/S4/S5/S6/S8 | done | threat-model-sast, auth-security, tdd-test-runner | sandbox isolation, env scrub, timeout, cap, cleanup verified |
-| 3.2 Static analysis S1/S2/S7 | pending | — | — |
+| 3.2 Static analysis S1/S2/S7 | done | threat-model-sast, auth-security, tdd-test-runner | blocked patterns, AST analysis, violations SANDBOX_VIOLATION |
 | 3.3 code_execute surface | done | mcp-tool-builder, tdd-test-runner, threat-model-sast, strict-typing-contracts | exactly-one validation, stdout/stderr/returncode, SANDBOX_TIMEOUT, sandbox_code flag |
 | 3.4 Task-mode code generation | done | mcp-tool-builder, tdd-test-runner, strict-typing-contracts | LLM generates code, saves to temp_dir, reports path, failure surfaces stderr |
 | 3.5 shell_command + whitelist | done | threat-model-sast, auth-security, tdd-test-runner | whitelist matrix, metachar injection rejected, disabled check |
@@ -254,7 +254,7 @@ last_update:     2026-09-14T00:00:00Z
 | 5.2 llm_synthesize | done | mcp-tool-builder, tdd-test-runner | source resolution (step_results/variables/literal) + unresolved tracking |
 | 5.3 default_tools bundle | done | mcp-tool-builder, tdd-test-runner | 10 tools, duck-typed config/llm injection, registry integration |
 | 5.4 Capability tags audit | done | mcp-tool-builder, tdd-test-runner | find_by_capability matrix, description/name length checks |
-| 5.5 Hardening & handoff | pending | — | — |
+| 5.5 Hardening & handoff | done | threat-model-sast, auth-security, tdd-test-runner, lint-formatting, strict-typing-contracts | full suite 230 tests, coverage 80%, ruff/mypy clean, handoff note |
 
 ### Skill Ledger
 | Timestamp (ISO) | Sub-phase | Files | Skill ID(s) | Change summary | Gates passed |
@@ -283,10 +283,45 @@ last_update:     2026-09-14T00:00:00Z
 | 2026-09-14T14:16:00Z | 5.2 | agent_harness/tools/llm_synthesize.py, tests/test_tools/test_llm_synthesize.py | mcp-tool-builder, tdd-test-runner | Implement llm_synthesize per SPEC-002 §3.7 with source resolution | tests, ruff, mypy |
 | 2026-09-14T14:17:00Z | 5.3 | agent_harness/tools/__init__.py, tests/test_tools/test_default_tools.py | mcp-tool-builder, tdd-test-runner | Implement default_tools bundle per SPEC-002 §2 | tests, ruff, mypy |
 | 2026-09-14T14:18:00Z | 5.4 | tests/test_tools/test_default_tools.py | mcp-tool-builder, tdd-test-runner | Audit capability vocabulary and registry tags | tests, ruff, mypy |
+| 2026-09-14T14:19:00Z | 5.5 | planning/plan-2-tools/plan.md, agent_harness/tools/*, tests/test_tools/* | threat-model-sast, auth-security, tdd-test-runner, lint-formatting, strict-typing-contracts | Hardening sweep: 230 tests pass, 80% coverage, adversarial sandbox/path checks, handoff | tests, ruff, mypy, coverage |
 | — | — | — | — | _no source changes permitted yet_ | — |
 
 ### Spec/Skill Change Requests
 _None filed._
 
 ### Handoff Note
-_Written at Phase 5.5._
+**P2 Handoff — Tool System Complete (2026-09-14T14:19:00Z)**
+Coverage: 80% (1899 stmts, 383 miss), 230 tests pass, ruff clean, mypy --strict clean.
+
+**For P3 Orchestrator (tool failure semantics & retry):**
+- Every `ToolResult` has `success`, `output`/`error`, `metadata{tool_name,duration_ms,retryable?,violation?,truncated?,...}`. Never raises (R1).
+- `retryable=True` only for transient: timeouts/SANDBOX_TIMEOUT, 429/5xx, network timeouts. `SANDBOX_VIOLATION`, `TOOL_INPUT_INVALID`, `TOOL_EXECUTION_FAILED` (bad input, blocked code, whitelist) are `retryable=False` — do not retry at L1.
+- `run_tool` wrapper enforces R2 (validate first), R4, R5 (truncation), R1 (catch). Use it for uniform execution + `tool_executed` logging.
+- Deterministic fixtures: `EchoTool`/`BoomTool` in `tests/test_tools/doubles.py` — use for step-dependency and recovery tests. `FakeLLMClient` canned responses for US-2/US-3 re-plan flows.
+- Task-mode `code_execute`: check `metadata["generated_code_path"]` and `metadata["stderr"]` on failure for error-context regeneration.
+
+**For P4 Plugins & Composition (default_tools):**
+- `from agent_harness.tools import default_tools, BaseTool, ToolResult, ToolRegistry` — single import surface per SPEC-002 §2.
+- `default_tools(config, llm_client)` returns 10 tools in order: web_search, web_scrape, code_execute, file_read, file_write, llm_extract, llm_synthesize, pdf_export, csv_process, shell_command. All duck-typed (no concrete Config/LLM imports).
+- `pdf_export` degrades to markdown when `wkhtmltopdf` missing: `metadata["degraded"]=True`. `shell_command` is inert unless `config.security.allow_shell=true` — returns `TOOL_EXECUTION_FAILED` with enable hint.
+- Plugin authors subclass `BaseTool` only (name ≤40 chars, description ≤300 chars, R1-R8). Registry G1-G5 enforced (TypeError, warning on overwrite, insertion-ordered).
+
+**For P5 Quality & Integration:**
+- Integration fixtures: `tmp_workspace()` helper, `FakeConfig` (output_dir/temp_dir), `FakeLogger`. All tools use `context["allowed_read_paths"/"allowed_write_paths"]` and `context["step_results"]/"variables"`.
+- Adversarial coverage: sandbox S1/S2/S7 blocked patterns (subprocess, ctypes, socket, eval/exec, dunder), whitelist metachar rejection, path traversal (`..`, absolute escape, symlink resolve), CSV op index errors, PDF degraded.
+- Performance: truncation at `max_output_bytes` (default 1M) with `...[truncated]`; sandbox timeout 30s; shell 30s; web 20s. Use `metadata["truncated"]` to detect.
+
+**Conformance Matrix (SPEC-002 §3):**
+| Tool | I/O Contract | Capabilities | Test |
+|---|---|---|---|
+| web_search | §3.1 query/num_results/region → list[{title,url,snippet}] | search,web,research | test_web_search, test_search_providers |
+| web_scrape | §3.2 url/selector/max_length → str | web,scrape,extract | test_web_scrape |
+| code_execute | §3.3 code|task → stdout | code,execution,compute | test_code_* |
+| file_read | §3.4 path/format/encoding → csv/json/txt/md/pdf | file,read,io | test_file_read, test_path_safety |
+| file_write | §3.5 path/content/format/create_dirs → path | file,write,io | test_file_write |
+| llm_extract | §3.6 input_text/instruction/output_format → object/str | llm,extract,transform | test_llm_extract |
+| llm_synthesize | §3.7 instruction/sources/tone/max_words → str | llm,synthesize,generate | test_llm_synthesize |
+| pdf_export | §3.8 content/filename/format/page_size → path | export,pdf,document | test_pdf_export |
+| csv_process | §3.9 path/operations/output_path → list[dict] | csv,data,transform | test_csv_process |
+| shell_command | §3.10 command/args → stdout (whitelist SPEC-006 §5) | shell,system,execution | test_shell_command |
+
