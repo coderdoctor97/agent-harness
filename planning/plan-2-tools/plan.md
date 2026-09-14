@@ -244,7 +244,7 @@ last_update:     2026-09-14T00:00:00Z
 | 3.2 Static analysis S1/S2/S7 | pending | — | — |
 | 3.3 code_execute surface | done | mcp-tool-builder, tdd-test-runner, threat-model-sast, strict-typing-contracts | exactly-one validation, stdout/stderr/returncode, SANDBOX_TIMEOUT, sandbox_code flag |
 | 3.4 Task-mode code generation | done | mcp-tool-builder, tdd-test-runner, strict-typing-contracts | LLM generates code, saves to temp_dir, reports path, failure surfaces stderr |
-| 3.5 shell_command + whitelist | pending | — | — |
+| 3.5 shell_command + whitelist | done | threat-model-sast, auth-security, tdd-test-runner | whitelist matrix, metachar injection rejected, disabled check |
 | 4.1 file_read | pending | — | — |
 | 4.2 Path-safety guard | pending | — | — |
 | 4.3 file_write | pending | — | — |
@@ -273,6 +273,7 @@ last_update:     2026-09-14T00:00:00Z
 | 2026-09-14T14:06:00Z | 3.2 | agent_harness/tools/code_execute.py, tests/test_tools/test_code_static_analysis.py | threat-model-sast, auth-security, tdd-test-runner | Implement S1/S2/S7 pre-execution rejection pipeline | tests, ruff, mypy |
 | 2026-09-14T14:07:00Z | 3.3 | agent_harness/tools/code_execute.py, tests/test_tools/test_code_execute_tool.py | mcp-tool-builder, tdd-test-runner, threat-model-sast, strict-typing-contracts | Implement code_execute I/O contract with sandbox integration | tests, ruff, mypy |
 | 2026-09-14T14:08:00Z | 3.4 | agent_harness/tools/code_execute.py, tests/test_tools/test_code_task_mode.py | mcp-tool-builder, tdd-test-runner, strict-typing-contracts | Implement task-mode code generation with FakeLLM and error context | tests, ruff, mypy |
+| 2026-09-14T14:09:00Z | 3.5 | agent_harness/tools/shell_command.py, tests/test_tools/test_shell_command.py | threat-model-sast, auth-security, tdd-test-runner | Implement shell_command whitelist per SPEC-006 §5, metachar rejection | tests, ruff, mypy |
 | — | — | — | — | _no source changes permitted yet_ | — |
 
 ### Spec/Skill Change Requests
