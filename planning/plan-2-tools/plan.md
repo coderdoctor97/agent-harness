@@ -246,7 +246,7 @@ last_update:     2026-09-14T00:00:00Z
 | 3.4 Task-mode code generation | done | mcp-tool-builder, tdd-test-runner, strict-typing-contracts | LLM generates code, saves to temp_dir, reports path, failure surfaces stderr |
 | 3.5 shell_command + whitelist | done | threat-model-sast, auth-security, tdd-test-runner | whitelist matrix, metachar injection rejected, disabled check |
 | 4.1 file_read | done | mcp-tool-builder, tdd-test-runner | per-format fixtures, suggestion behavior |
-| 4.2 Path-safety guard | pending | — | — |
+| 4.2 Path-safety guard | done | threat-model-sast, auth-security, tdd-test-runner | traversal, symlink, roots-enumerated tests verified |
 | 4.3 file_write | pending | — | — |
 | 4.4 csv_process | pending | — | — |
 | 4.5 pdf_export degraded | pending | — | — |
@@ -275,6 +275,7 @@ last_update:     2026-09-14T00:00:00Z
 | 2026-09-14T14:08:00Z | 3.4 | agent_harness/tools/code_execute.py, tests/test_tools/test_code_task_mode.py | mcp-tool-builder, tdd-test-runner, strict-typing-contracts | Implement task-mode code generation with FakeLLM and error context | tests, ruff, mypy |
 | 2026-09-14T14:09:00Z | 3.5 | agent_harness/tools/shell_command.py, tests/test_tools/test_shell_command.py | threat-model-sast, auth-security, tdd-test-runner | Implement shell_command whitelist per SPEC-006 §5, metachar rejection | tests, ruff, mypy |
 | 2026-09-14T14:10:00Z | 4.1 | agent_harness/tools/file_read.py, tests/test_tools/test_file_read.py | mcp-tool-builder, tdd-test-runner | Implement file_read per SPEC-002 §3.4 with per-format output | tests, ruff, mypy |
+| 2026-09-14T14:11:00Z | 4.2 | agent_harness/tools/_paths.py, agent_harness/tools/file_read.py, tests/test_tools/test_path_safety.py | threat-model-sast, auth-security, tdd-test-runner | Implement shared path-safety guard with workspace/output_dir/allowed_paths | tests, ruff, mypy |
 | — | — | — | — | _no source changes permitted yet_ | — |
 
 ### Spec/Skill Change Requests
