@@ -252,8 +252,8 @@ last_update:     2026-09-14T00:00:00Z
 | 4.5 pdf_export degraded | done | mcp-tool-builder, tdd-test-runner | degraded fallback to .md, wkhtmltopdf detection, output_dir creation |
 | 5.1 llm_extract | done | mcp-tool-builder, tdd-test-runner | duck-typed LLM, JSON fences, output_format handling |
 | 5.2 llm_synthesize | done | mcp-tool-builder, tdd-test-runner | source resolution (step_results/variables/literal) + unresolved tracking |
-| 5.3 default_tools bundle | pending | — | — |
-| 5.4 Capability tags audit | pending | — | — |
+| 5.3 default_tools bundle | done | mcp-tool-builder, tdd-test-runner | 10 tools, duck-typed config/llm injection, registry integration |
+| 5.4 Capability tags audit | done | mcp-tool-builder, tdd-test-runner | find_by_capability matrix, description/name length checks |
 | 5.5 Hardening & handoff | pending | — | — |
 
 ### Skill Ledger
@@ -281,6 +281,8 @@ last_update:     2026-09-14T00:00:00Z
 | 2026-09-14T14:14:00Z | 4.5 | agent_harness/tools/pdf_export.py, tests/test_tools/test_pdf_export.py | mcp-tool-builder, tdd-test-runner | Implement pdf_export per SPEC-002 §3.8 with degraded markdown | tests, ruff, mypy |
 | 2026-09-14T14:15:00Z | 5.1 | agent_harness/tools/llm_extract.py, tests/test_tools/test_llm_extract.py | mcp-tool-builder, tdd-test-runner | Implement llm_extract per SPEC-002 §3.6 with JSON/text/markdown | tests, ruff, mypy |
 | 2026-09-14T14:16:00Z | 5.2 | agent_harness/tools/llm_synthesize.py, tests/test_tools/test_llm_synthesize.py | mcp-tool-builder, tdd-test-runner | Implement llm_synthesize per SPEC-002 §3.7 with source resolution | tests, ruff, mypy |
+| 2026-09-14T14:17:00Z | 5.3 | agent_harness/tools/__init__.py, tests/test_tools/test_default_tools.py | mcp-tool-builder, tdd-test-runner | Implement default_tools bundle per SPEC-002 §2 | tests, ruff, mypy |
+| 2026-09-14T14:18:00Z | 5.4 | tests/test_tools/test_default_tools.py | mcp-tool-builder, tdd-test-runner | Audit capability vocabulary and registry tags | tests, ruff, mypy |
 | — | — | — | — | _no source changes permitted yet_ | — |
 
 ### Spec/Skill Change Requests
