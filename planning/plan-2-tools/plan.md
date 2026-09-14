@@ -250,8 +250,8 @@ last_update:     2026-09-14T00:00:00Z
 | 4.3 file_write | done | mcp-tool-builder, tdd-test-runner, auth-security | atomic via temp+replace, parents/create_dirs, output_dir enforcement |
 | 4.4 csv_process | done | mcp-tool-builder, tdd-test-runner | op chain, error index, output_path verified |
 | 4.5 pdf_export degraded | done | mcp-tool-builder, tdd-test-runner | degraded fallback to .md, wkhtmltopdf detection, output_dir creation |
-| 5.1 llm_extract | pending | — | — |
-| 5.2 llm_synthesize | pending | — | — |
+| 5.1 llm_extract | done | mcp-tool-builder, tdd-test-runner | duck-typed LLM, JSON fences, output_format handling |
+| 5.2 llm_synthesize | done | mcp-tool-builder, tdd-test-runner | source resolution (step_results/variables/literal) + unresolved tracking |
 | 5.3 default_tools bundle | pending | — | — |
 | 5.4 Capability tags audit | pending | — | — |
 | 5.5 Hardening & handoff | pending | — | — |
@@ -279,6 +279,8 @@ last_update:     2026-09-14T00:00:00Z
 | 2026-09-14T14:12:00Z | 4.3 | agent_harness/tools/file_write.py, tests/test_tools/test_file_write.py | mcp-tool-builder, tdd-test-runner, auth-security | Implement file_write per SPEC-002 §3.5 with atomic replace and path guard | tests, ruff, mypy |
 | 2026-09-14T14:13:00Z | 4.4 | agent_harness/tools/csv_process.py, tests/test_tools/test_csv_process.py | mcp-tool-builder, tdd-test-runner | Implement csv_process per SPEC-002 §3.9 with 7 ops | tests, ruff, mypy |
 | 2026-09-14T14:14:00Z | 4.5 | agent_harness/tools/pdf_export.py, tests/test_tools/test_pdf_export.py | mcp-tool-builder, tdd-test-runner | Implement pdf_export per SPEC-002 §3.8 with degraded markdown | tests, ruff, mypy |
+| 2026-09-14T14:15:00Z | 5.1 | agent_harness/tools/llm_extract.py, tests/test_tools/test_llm_extract.py | mcp-tool-builder, tdd-test-runner | Implement llm_extract per SPEC-002 §3.6 with JSON/text/markdown | tests, ruff, mypy |
+| 2026-09-14T14:16:00Z | 5.2 | agent_harness/tools/llm_synthesize.py, tests/test_tools/test_llm_synthesize.py | mcp-tool-builder, tdd-test-runner | Implement llm_synthesize per SPEC-002 §3.7 with source resolution | tests, ruff, mypy |
 | — | — | — | — | _no source changes permitted yet_ | — |
 
 ### Spec/Skill Change Requests
