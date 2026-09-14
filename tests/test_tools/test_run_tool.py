@@ -122,7 +122,7 @@ def test_run_tool_truncates_output_r5() -> None:
     assert result.output.endswith("...[truncated]")
     # length should be <= max_bytes when encoded
     assert (
-        len(result.output.encode("utf-8")) <= 10 + len("...[truncated]".encode("utf-8"))
+        len(result.output.encode("utf-8")) <= 10 + len(b"...[truncated]")
         or len(result.output.encode("utf-8")) <= 10 + 20
     )  # allow marker
     # Ensure original long not fully present
