@@ -178,6 +178,35 @@ def _truncate_bytes(data: str, max_bytes: int) -> tuple[str, bool]:
     return truncated, True
 
 
+def _get_config_value(config: Any, path: str, default: Any) -> Any:
+    cur: Any = config
+    for part in path.split("."):
+        if cur is None:
+            return default
+        if isinstance(cur, dict):
+            cur = cur.get(part, default)
+        else:
+            cur = getattr(cur, part, default)
+        if cur is default:
+            return default
+    return cur
+
+
+def _resolve_code_settings(config: Any) -> tuple[bool, int, int, bool, str]:
+    sandbox_code: bool = bool(_get_config_value(config, "security.sandbox_code", True))
+    code_timeout: int = int(_get_config_value(config, "security.code_timeout", 30))
+    max_output: int = int(
+        _get_config_value(config, "security.max_output_bytes", 1_000_000)
+    )
+    network_in_code: bool = bool(
+        _get_config_value(config, "security.network_in_code", False)
+    )
+    temp_dir: str = str(
+        _get_config_value(config, "execution.temp_dir", tempfile.gettempdir())
+    )
+    return sandbox_code, code_timeout, max_output, network_in_code, temp_dir
+
+
 def execute_code_sandboxed(
     code: str,
     *,
@@ -276,3 +305,290 @@ def execute_code_sandboxed(
                     tmp_path.unlink()
             except Exception:  # noqa: BLE001, S110
                 pass
+
+
+# ── Tool surface (SPEC-002 §3.3) ─────────────────────────────────────────────
+
+from agent_harness.tools.base import BaseTool, ToolResult
+
+
+class CodeExecuteTool(BaseTool):
+    """Code execution tool with sandbox enforcement.
+
+    Spec: SPEC-002 §3.3, SPEC-006 §4
+    """
+
+    def __init__(self, config: Any = None, llm_client: Any = None) -> None:
+        self._config = config
+        self._llm_client = llm_client
+
+    @property
+    def name(self) -> str:
+        return "code_execute"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Executes Python code. Input: {code: str (python code) OR task: str (LLM generates code), "
+            "language: str (default python)}. Output: stdout. "
+            "Stderr/returncode in metadata. Sandboxed with timeout and pattern checks."
+        )
+
+    @property
+    def capabilities(self) -> list[str]:
+        return ["code", "execution", "compute"]
+
+    def validate_input(self, input_data: dict[str, Any]) -> tuple[bool, str]:
+        has_code = "code" in input_data
+        has_task = "task" in input_data
+        if has_code and has_task:
+            return False, "Provide exactly one of 'code' or 'task', not both"
+        if not has_code and not has_task:
+            return False, "Provide exactly one of 'code' or 'task'"
+        if has_code:
+            code = input_data["code"]
+            if not isinstance(code, str) or not code.strip():
+                return False, "'code' must be a non-empty string"
+        if has_task:
+            task = input_data["task"]
+            if not isinstance(task, str) or not task.strip():
+                return False, "'task' must be a non-empty string"
+            if "language" in input_data and not isinstance(input_data["language"], str):
+                return False, "'language' must be a string"
+            lang = input_data.get("language", "python")
+            if lang != "python":
+                return False, "Only 'python' language is supported"
+        return True, ""
+
+    def execute(
+        self, input_data: dict[str, Any], context: dict[str, Any]
+    ) -> ToolResult:
+        start = time.monotonic()
+        # R2 validate first
+        is_valid, err = self.validate_input(input_data)
+        if not is_valid:
+            return ToolResult(
+                success=False,
+                error=f"TOOL_INPUT_INVALID: {err}",
+                metadata={
+                    "tool_name": self.name,
+                    "duration_ms": int((time.monotonic() - start) * 1000),
+                    "retryable": False,
+                },
+            )
+
+        sandbox_code, code_timeout, max_output, network_in_code, temp_dir = (
+            _resolve_code_settings(self._config)
+        )
+
+        # Resolve code source: either direct code or task-generated
+        code_str: str | None = None
+        generated_path: str | None = None
+
+        if "code" in input_data:
+            code_str = str(input_data["code"])
+        else:
+            # task mode — delegate to 3.4 logic; for 3.3 we handle minimal
+            task = str(input_data["task"])
+            language = str(input_data.get("language", "python"))
+            # Task mode requires llm_client
+            llm = self._llm_client
+            # Fallback to context injection per SPEC-002 §3.3
+            if llm is None:
+                llm = context.get("llm_client") if isinstance(context, dict) else None
+            if llm is None:
+                return ToolResult(
+                    success=False,
+                    error="TOOL_EXECUTION_FAILED: llm_client required for task mode",
+                    metadata={
+                        "tool_name": self.name,
+                        "duration_ms": int((time.monotonic() - start) * 1000),
+                        "retryable": False,
+                    },
+                )
+            # Generate code via llm (3.4 will expand, but implement basic here)
+            try:
+                # Prefer complete_json? For code generation we prompt for code
+                prompt_messages = [
+                    {
+                        "role": "system",
+                        "content": "You are a code generator. Return only Python code.",
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Task: {task}\nLanguage: {language}\nGenerate code.",
+                    },
+                ]
+                if hasattr(llm, "complete"):
+                    resp = llm.complete(prompt_messages)
+                    generated = resp.text if hasattr(resp, "text") else str(resp)
+                else:
+                    generated = str(task)
+                # Strip fences if present
+                generated = generated.strip()
+                if generated.startswith("```"):
+                    # Remove markdown fences
+                    lines = generated.split("\n")
+                    # Remove first fence line
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    # Remove last fence if present
+                    if lines and lines[-1].strip().startswith("```"):
+                        lines = lines[:-1]
+                    generated = "\n".join(lines)
+                code_str = generated
+                # Save to temp_dir for inspection per spec
+                try:
+                    Path(temp_dir).mkdir(parents=True, exist_ok=True)
+                    tmp_file = Path(tempfile.mkstemp(suffix=".py", dir=temp_dir)[1])
+                    Path(tmp_file).write_text(code_str, encoding="utf-8")
+                    generated_path = str(tmp_file)
+                except Exception:  # noqa: BLE001
+                    generated_path = None
+            except Exception as exc:  # noqa: BLE001
+                return ToolResult(
+                    success=False,
+                    error=f"LLM code generation failed: {exc}",
+                    metadata={
+                        "tool_name": self.name,
+                        "duration_ms": int((time.monotonic() - start) * 1000),
+                        "retryable": False,
+                    },
+                )
+
+        assert code_str is not None  # for mypy
+
+        # S1/S2/S7 pre-check
+        is_safe, violation = check_code_safety(
+            code_str, network_in_code=network_in_code
+        )
+        if not is_safe:
+            return ToolResult(
+                success=False,
+                error=violation,
+                metadata={
+                    "tool_name": self.name,
+                    "duration_ms": int((time.monotonic() - start) * 1000),
+                    "retryable": False,
+                    "violation": "SANDBOX_VIOLATION",
+                },
+            )
+
+        # If sandbox disabled, do direct exec (documented risk)
+        if not sandbox_code:
+            return self._direct_execute(code_str, start, generated_path, max_output)
+
+        # Sandboxed execution S3-S6/S8
+        result = execute_code_sandboxed(
+            code_str, timeout=code_timeout, max_output_bytes=max_output
+        )
+        duration_ms = result["duration_ms"]
+
+        if result["timed_out"]:
+            meta: dict[str, Any] = {
+                "tool_name": self.name,
+                "duration_ms": duration_ms,
+                "retryable": False,
+                "violation": "SANDBOX_TIMEOUT",
+                "stderr": result["stderr"],
+                "returncode": result["returncode"],
+            }
+            if generated_path:
+                meta["generated_code_path"] = generated_path
+            if result["truncated"]:
+                meta["truncated"] = True
+            return ToolResult(
+                success=False,
+                error=f"SANDBOX_TIMEOUT: Code execution timed out ({code_timeout}s)",
+                metadata=meta,
+            )
+
+        stdout: str = result["stdout"]
+        stderr: str = result["stderr"]
+        returncode: int = result["returncode"]
+        truncated: bool = result["truncated"]
+
+        if returncode != 0:
+            meta2: dict[str, Any] = {
+                "tool_name": self.name,
+                "duration_ms": duration_ms,
+                "retryable": False,
+                "stderr": stderr,
+                "returncode": returncode,
+            }
+            if generated_path:
+                meta2["generated_code_path"] = generated_path
+            if truncated:
+                meta2["truncated"] = True
+            # Include stdout as output even on failure per spec? Spec says stderr/returncode in metadata, stdout as output
+            # But failure should have output as stdout? We'll return stdout as output with success False
+            return ToolResult(
+                success=False,
+                output=stdout,
+                error=stderr or f"Code exited with {returncode}",
+                metadata=meta2,
+            )
+
+        meta3: dict[str, Any] = {
+            "tool_name": self.name,
+            "duration_ms": duration_ms,
+            "stderr": stderr,
+            "returncode": returncode,
+        }
+        if generated_path:
+            meta3["generated_code_path"] = generated_path
+        if truncated:
+            meta3["truncated"] = True
+        return ToolResult(success=True, output=stdout, metadata=meta3)
+
+    def _direct_execute(
+        self, code: str, start: float, generated_path: str | None, max_output: int
+    ) -> ToolResult:
+        """Direct exec when sandbox disabled (documented risk)."""
+        import contextlib
+        import io
+
+        stdout_buf = io.StringIO()
+        stderr_buf = io.StringIO()
+        try:
+            with (
+                contextlib.redirect_stdout(stdout_buf),
+                contextlib.redirect_stderr(stderr_buf),
+            ):
+                exec(code, {"__builtins__": __builtins__}, {})  # noqa: S102
+            stdout = stdout_buf.getvalue()
+            stderr = stderr_buf.getvalue()
+            # Truncate if needed
+            trunc = False
+            if len(stdout.encode("utf-8")) > max_output:
+                stdout, _ = _truncate_bytes(stdout, max_output)
+                trunc = True
+            if len(stderr.encode("utf-8")) > max_output:
+                stderr, _ = _truncate_bytes(stderr, max_output)
+                trunc = True
+            meta: dict[str, Any] = {
+                "tool_name": self.name,
+                "duration_ms": int((time.monotonic() - start) * 1000),
+                "stderr": stderr,
+                "returncode": 0,
+            }
+            if generated_path:
+                meta["generated_code_path"] = generated_path
+            if trunc:
+                meta["truncated"] = True
+            return ToolResult(success=True, output=stdout, metadata=meta)
+        except Exception as exc:  # noqa: BLE001
+            stdout = stdout_buf.getvalue()
+            stderr = stderr_buf.getvalue() + f"\n{exc}"
+            meta2: dict[str, Any] = {
+                "tool_name": self.name,
+                "duration_ms": int((time.monotonic() - start) * 1000),
+                "stderr": stderr,
+                "returncode": 1,
+                "retryable": False,
+            }
+            if generated_path:
+                meta2["generated_code_path"] = generated_path
+            return ToolResult(
+                success=False, output=stdout, error=str(exc), metadata=meta2
+            )

@@ -242,7 +242,7 @@ last_update:     2026-09-14T00:00:00Z
 | 2.5 Retrieval tool hardening | done | mcp-tool-builder, tdd-test-runner, strict-typing-contracts, threat-model-sast | coverage 89%, ruff/mypy clean, deterministic ordering |
 | 3.1 CodeSandbox core S3/S4/S5/S6/S8 | done | threat-model-sast, auth-security, tdd-test-runner | sandbox isolation, env scrub, timeout, cap, cleanup verified |
 | 3.2 Static analysis S1/S2/S7 | pending | — | — |
-| 3.3 code_execute surface | pending | — | — |
+| 3.3 code_execute surface | done | mcp-tool-builder, tdd-test-runner, threat-model-sast, strict-typing-contracts | exactly-one validation, stdout/stderr/returncode, SANDBOX_TIMEOUT, sandbox_code flag |
 | 3.4 Task-mode code generation | pending | — | — |
 | 3.5 shell_command + whitelist | pending | — | — |
 | 4.1 file_read | pending | — | — |
@@ -271,6 +271,7 @@ last_update:     2026-09-14T00:00:00Z
 | 2026-09-14T14:04:00Z | 2.5 | agent_harness/tools/web_search.py, agent_harness/tools/web_scrape.py, tests/test_tools/test_retrieval_hardening.py | mcp-tool-builder, tdd-test-runner, strict-typing-contracts, threat-model-sast | Harden retrieval tools: validation, caps, ordering, coverage ≥80% | tests, ruff, mypy |
 | 2026-09-14T14:05:00Z | 3.1 | agent_harness/tools/code_execute.py, tests/test_tools/test_code_sandbox.py | threat-model-sast, auth-security, tdd-test-runner | Implement S3/S4/S5/S6/S8 sandbox core with env-leak and timeout tests | tests, ruff, mypy |
 | 2026-09-14T14:06:00Z | 3.2 | agent_harness/tools/code_execute.py, tests/test_tools/test_code_static_analysis.py | threat-model-sast, auth-security, tdd-test-runner | Implement S1/S2/S7 pre-execution rejection pipeline | tests, ruff, mypy |
+| 2026-09-14T14:07:00Z | 3.3 | agent_harness/tools/code_execute.py, tests/test_tools/test_code_execute_tool.py | mcp-tool-builder, tdd-test-runner, threat-model-sast, strict-typing-contracts | Implement code_execute I/O contract with sandbox integration | tests, ruff, mypy |
 | — | — | — | — | _no source changes permitted yet_ | — |
 
 ### Spec/Skill Change Requests
