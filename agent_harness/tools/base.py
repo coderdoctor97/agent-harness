@@ -6,6 +6,7 @@ Spec: SPEC-001 §2.3 (ToolResult), SPEC-002 §1 (BaseTool)
 from __future__ import annotations
 
 import time
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -285,3 +286,53 @@ def _emit_tool_log(
     except Exception:  # noqa: BLE001, S110
         # Logging must never break tool execution
         pass
+
+
+class ToolRegistry:
+    """Registry for tool discovery, registration, and lookup.
+
+    Spec: SPEC-002 §2 — FROZEN contract.
+    """
+
+    def __init__(self) -> None:
+        self._tools: dict[str, BaseTool] = {}
+
+    def register(self, tool: BaseTool) -> None:
+        """Register a tool instance. Spec: SPEC-002 §2 G1/G2."""
+        if not isinstance(tool, BaseTool):
+            raise TypeError("Tool must implement BaseTool interface")
+        name: str = tool.name
+        if name in self._tools:
+            warnings.warn(
+                f"Tool {name!r} already registered — overwriting",
+                UserWarning,
+                stacklevel=2,
+            )
+        self._tools[name] = tool
+
+    def get(self, name: str) -> BaseTool | None:
+        """Lookup tool by name."""
+        return self._tools.get(name)
+
+    def find_by_capability(self, capability: str) -> list[BaseTool]:
+        """Find tools declaring a given capability tag."""
+        return [t for t in self._tools.values() if capability in t.capabilities]
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        """List registered tools with description/capabilities (insertion order)."""
+        return [
+            {
+                "name": t.name,
+                "description": t.description,
+                "capabilities": list(t.capabilities),
+            }
+            for t in self._tools.values()
+        ]
+
+    def deregister(self, name: str) -> None:
+        """Remove tool; no-op if unknown (G5)."""
+        self._tools.pop(name, None)
+
+    def names(self) -> list[str]:
+        """Sorted tool names for deterministic prompts."""
+        return sorted(self._tools.keys())

@@ -233,7 +233,7 @@ last_update:     2026-09-14T00:00:00Z
 | 1.1 ToolResult & helpers | done | mcp-tool-builder, strict-typing-contracts, tdd-test-runner, lint-formatting | helpers populate tool_name/duration_ms, frozen fields verified |
 | 1.2 BaseTool ABC | done | mcp-tool-builder, strict-typing-contracts, tdd-test-runner | ABC frozen contract, defaults verified |
 | 1.3 Execution wrapper R1/R2/R4/R5 | done | mcp-tool-builder, strict-typing-contracts, tdd-test-runner | wrapper catches, validates, truncates, logs |
-| 1.4 ToolRegistry | pending | — | — |
+| 1.4 ToolRegistry | done | mcp-tool-builder, strict-typing-contracts, tdd-test-runner | G1-G5 verified, warnings, ordering |
 | 1.5 Shared test doubles & fixtures | pending | — | — |
 | 2.1 Search provider abstraction | pending | — | — |
 | 2.2 web_search tool | pending | — | — |
@@ -262,6 +262,7 @@ last_update:     2026-09-14T00:00:00Z
 | 2026-09-14T13:55:00Z | 1.1 | agent_harness/tools/base.py, agent_harness/tools/__init__.py, tests/test_tools/test_toolresult.py | mcp-tool-builder, strict-typing-contracts, tdd-test-runner, lint-formatting | Implement ToolResult per SPEC-001 §2.3 and ok/fail helpers with R4 defaults | tests, ruff, mypy |
 | 2026-09-14T13:56:00Z | 1.2 | agent_harness/tools/base.py, agent_harness/tools/__init__.py, tests/test_tools/test_basetools.py | mcp-tool-builder, strict-typing-contracts, tdd-test-runner | Implement BaseTool ABC per SPEC-002 §1 with R1-R8 docstring | tests, ruff, mypy |
 | 2026-09-14T13:57:00Z | 1.3 | agent_harness/tools/base.py, tests/test_tools/test_run_tool.py | mcp-tool-builder, strict-typing-contracts, tdd-test-runner, threat-model-sast | Implement run_tool enforcing R1/R2/R4/R5 with truncation and logging | tests, ruff, mypy |
+| 2026-09-14T13:58:00Z | 1.4 | agent_harness/tools/base.py, agent_harness/tools/__init__.py, tests/test_tools/test_registry.py | mcp-tool-builder, strict-typing-contracts, tdd-test-runner | Implement ToolRegistry per SPEC-002 §2 G1-G5 | tests, ruff, mypy |
 | — | — | — | — | _no source changes permitted yet_ | — |
 
 ### Spec/Skill Change Requests
