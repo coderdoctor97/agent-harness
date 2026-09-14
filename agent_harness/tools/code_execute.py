@@ -463,15 +463,18 @@ class CodeExecuteTool(BaseTool):
             code_str, network_in_code=network_in_code
         )
         if not is_safe:
+            meta_violation: dict[str, object] = {
+                "tool_name": self.name,
+                "duration_ms": int((time.monotonic() - start) * 1000),
+                "retryable": False,
+                "violation": "SANDBOX_VIOLATION",
+            }
+            if generated_path:
+                meta_violation["generated_code_path"] = generated_path
             return ToolResult(
                 success=False,
                 error=violation,
-                metadata={
-                    "tool_name": self.name,
-                    "duration_ms": int((time.monotonic() - start) * 1000),
-                    "retryable": False,
-                    "violation": "SANDBOX_VIOLATION",
-                },
+                metadata=meta_violation,
             )
 
         # If sandbox disabled, do direct exec (documented risk)
