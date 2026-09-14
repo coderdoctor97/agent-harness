@@ -235,7 +235,7 @@ last_update:     2026-09-14T00:00:00Z
 | 1.3 Execution wrapper R1/R2/R4/R5 | done | mcp-tool-builder, strict-typing-contracts, tdd-test-runner | wrapper catches, validates, truncates, logs |
 | 1.4 ToolRegistry | done | mcp-tool-builder, strict-typing-contracts, tdd-test-runner | G1-G5 verified, warnings, ordering |
 | 1.5 Shared test doubles & fixtures | done | tdd-test-runner, strict-typing-contracts, mcp-tool-builder | FakeConfig/LLM/Logger/EchoTool pattern, zero network |
-| 2.1 Search provider abstraction | pending | — | — |
+| 2.1 Search provider abstraction | done | mcp-tool-builder, strict-typing-contracts, tdd-test-runner | provider matrix & missing-key handling verified |
 | 2.2 web_search tool | pending | — | — |
 | 2.3 web_scrape tool | pending | — | — |
 | 2.4 Network failure classification | pending | — | — |
@@ -264,6 +264,7 @@ last_update:     2026-09-14T00:00:00Z
 | 2026-09-14T13:57:00Z | 1.3 | agent_harness/tools/base.py, tests/test_tools/test_run_tool.py | mcp-tool-builder, strict-typing-contracts, tdd-test-runner, threat-model-sast | Implement run_tool enforcing R1/R2/R4/R5 with truncation and logging | tests, ruff, mypy |
 | 2026-09-14T13:58:00Z | 1.4 | agent_harness/tools/base.py, agent_harness/tools/__init__.py, tests/test_tools/test_registry.py | mcp-tool-builder, strict-typing-contracts, tdd-test-runner | Implement ToolRegistry per SPEC-002 §2 G1-G5 | tests, ruff, mypy |
 | 2026-09-14T13:59:00Z | 1.5 | tests/test_tools/doubles.py, tests/test_tools/test_doubles.py | tdd-test-runner, strict-typing-contracts, mcp-tool-builder | Build spec-shaped doubles kit for P3/P4 reuse | tests, ruff, mypy |
+| 2026-09-14T14:00:00Z | 2.1 | agent_harness/tools/web_search.py, tests/test_tools/test_search_providers.py | mcp-tool-builder, strict-typing-contracts, tdd-test-runner | Implement search provider abstraction per SPEC-002 §3.1 | tests, ruff, mypy |
 | — | — | — | — | _no source changes permitted yet_ | — |
 
 ### Spec/Skill Change Requests
