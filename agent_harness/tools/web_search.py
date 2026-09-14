@@ -273,6 +273,14 @@ def _classify_search_error(exc: Exception, provider_name: str) -> tuple[str, boo
     if isinstance(exc, requests.exceptions.Timeout):
         return f"Search timeout ({provider_name}): {msg}", True
     if isinstance(exc, requests.exceptions.ConnectionError):
+        lower = msg.lower()
+        if (
+            "name" in lower
+            or "dns" in lower
+            or "getaddrinfo" in lower
+            or "resolve" in lower
+        ):
+            return f"Search DNS failure ({provider_name}): {msg}", False
         return f"Search connection error ({provider_name}): {msg}", True
     if isinstance(exc, requests.exceptions.HTTPError):
         # Try to extract status code
