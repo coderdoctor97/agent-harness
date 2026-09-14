@@ -6,9 +6,12 @@ Spec: SPEC-002 §3.1, SPEC-006 §1 search config
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Protocol
 
 import requests
+
+from agent_harness.tools.base import BaseTool, ToolResult
 
 
 class SearchProvider(Protocol):
@@ -261,3 +264,172 @@ def create_search_provider(config: Any) -> SearchProvider:
         return GoogleProvider(api_key)
     # Unknown provider → fallback to duckduckgo with warning? But spec says enum.
     raise ValueError(f"Unknown search provider {name!r}")
+
+
+def _classify_search_error(exc: Exception, provider_name: str) -> tuple[str, bool]:
+    """Map search exception to (message, retryable). Spec: SPEC-002 §3.1."""
+    msg = str(exc)
+    # Timeout vs connection vs http status
+    if isinstance(exc, requests.exceptions.Timeout):
+        return f"Search timeout ({provider_name}): {msg}", True
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return f"Search connection error ({provider_name}): {msg}", True
+    if isinstance(exc, requests.exceptions.HTTPError):
+        # Try to extract status code
+        resp = getattr(exc, "response", None)
+        status: int | None = None
+        if resp is not None:
+            status = getattr(resp, "status_code", None)
+        # Fallback parse from message
+        if status is None:
+            # Check if msg contains 429 etc
+            if "429" in msg:
+                status = 429
+            elif "500" in msg:
+                status = 500
+        if status is not None:
+            if status == 429 or 500 <= status < 600:
+                return f"Search HTTP {status} ({provider_name}): {msg}", True
+            # 4xx not retryable (except 429)
+            return f"Search HTTP {status} ({provider_name}): {msg}", False
+        return f"Search HTTP error ({provider_name}): {msg}", True
+    # ValueError for missing key is not retryable
+    if isinstance(exc, ValueError) and "Missing API key" in msg:
+        return msg, False
+    # RuntimeError from duckduckgo etc
+    if isinstance(exc, RuntimeError):
+        # Check if rate-limit like
+        lower = msg.lower()
+        if "rate" in lower or "429" in lower:
+            return f"Search error ({provider_name}): {msg}", True
+        return f"Search error ({provider_name}): {msg}", False
+    return f"Search error ({provider_name}): {msg}", False
+
+
+class WebSearchTool(BaseTool):
+    """Web search tool (research entry point).
+
+    Spec: SPEC-002 §3.1
+    """
+
+    def __init__(
+        self,
+        config: Any = None,
+        provider: SearchProvider | None = None,
+    ) -> None:
+        self._config = config
+        self._provider_override = provider
+
+    @property
+    def name(self) -> str:
+        return "web_search"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Searches the web. Input: {query: str (required), "
+            "num_results: int (default config.search.max_results), "
+            "region: str (optional)}. Output: list of {title, url, snippet}. "
+            "Empty results succeed with metadata no_results."
+        )
+
+    @property
+    def capabilities(self) -> list[str]:
+        return ["search", "web", "research"]
+
+    def validate_input(self, input_data: dict[str, Any]) -> tuple[bool, str]:
+        if "query" not in input_data:
+            return False, "Missing required 'query'"
+        q = input_data["query"]
+        if not isinstance(q, str) or not q.strip():
+            return False, "'query' must be a non-empty string"
+        if "num_results" in input_data:
+            nr = input_data["num_results"]
+            if not isinstance(nr, int) or nr <= 0:
+                return False, "'num_results' must be a positive int"
+            if nr > 50:
+                return False, "'num_results' must be <= 50"
+        if "region" in input_data and not isinstance(input_data["region"], str):
+            return False, "'region' must be a string"
+        return True, ""
+
+    def execute(
+        self, input_data: dict[str, Any], context: dict[str, Any]
+    ) -> ToolResult:
+        start = time.monotonic()
+        # Validate first (also enforced by run_tool but we handle directly)
+        is_valid, err = self.validate_input(input_data)
+        if not is_valid:
+            return ToolResult(
+                success=False,
+                error=f"TOOL_INPUT_INVALID: {err}",
+                metadata={
+                    "tool_name": self.name,
+                    "duration_ms": int((time.monotonic() - start) * 1000),
+                    "retryable": False,
+                },
+            )
+        query: str = str(input_data["query"]).strip()
+        num_results: int = int(
+            input_data.get("num_results", _get_max_results(self._config))
+        )
+        region: str | None = input_data.get("region")
+
+        # Resolve provider
+        provider: SearchProvider | None = self._provider_override
+        provider_name = "unknown"
+        try:
+            if provider is None:
+                provider = create_search_provider(self._config)
+            provider_name = getattr(provider, "name", type(provider).__name__)
+            results = provider.search(query, num_results, region)
+        except Exception as exc:  # noqa: BLE001
+            msg, retryable = _classify_search_error(exc, provider_name)
+            return ToolResult(
+                success=False,
+                error=msg,
+                metadata={
+                    "tool_name": self.name,
+                    "duration_ms": int((time.monotonic() - start) * 1000),
+                    "retryable": retryable,
+                    "provider": provider_name,
+                    "query": query,
+                },
+            )
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        if not results:
+            return ToolResult(
+                success=True,
+                output=[],
+                metadata={
+                    "tool_name": self.name,
+                    "duration_ms": duration_ms,
+                    "no_results": True,
+                    "provider": provider_name,
+                    "query": query,
+                },
+            )
+        # Deterministic ordering (as returned), ensure shape
+        normalized: list[dict[str, str]] = []
+        for r in results:
+            normalized.append(
+                {
+                    "title": str(r.get("title", "")),
+                    "url": str(r.get("url", "")),
+                    "snippet": str(r.get("snippet", "")),
+                }
+            )
+        # Apply overall output cap via config if needed — wrapper handles R5, but we also
+        # ensure we don't exceed drastically by truncating list length to num_results
+        normalized = normalized[:num_results]
+        return ToolResult(
+            success=True,
+            output=normalized,
+            metadata={
+                "tool_name": self.name,
+                "duration_ms": duration_ms,
+                "provider": provider_name,
+                "query": query,
+            },
+        )
