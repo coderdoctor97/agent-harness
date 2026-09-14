@@ -181,17 +181,85 @@
 
 ### Agent Manifest
 ```yaml
-# PASTE the manifest from .agent/agent.md § 1 here when the plan is claimed
+# ── Agent Manifest ────────────────────────────────────────────
+agent_id:        P2-tools-01
+name:            Toolsmith
+role:            implementer
+plan:            planning/plan-2-tools/plan.md
+owned_paths:
+  - agent_harness/tools/__init__.py
+  - agent_harness/tools/base.py
+  - agent_harness/tools/web_search.py
+  - agent_harness/tools/web_scrape.py
+  - agent_harness/tools/code_execute.py
+  - agent_harness/tools/file_read.py
+  - agent_harness/tools/file_write.py
+  - agent_harness/tools/llm_extract.py
+  - agent_harness/tools/llm_synthesize.py
+  - agent_harness/tools/pdf_export.py
+  - agent_harness/tools/csv_process.py
+  - agent_harness/tools/shell_command.py
+  - tests/test_tools/
+consumed_specs:
+  - SPEC-000  # architecture boundaries
+  - SPEC-001  # core data model (ToolResult)
+  - SPEC-002  # tool system (owns)
+  - SPEC-004  # LLMClient contract
+  - SPEC-006  # config, sandbox, shell whitelist
+produces:
+  - agent_harness.tools.default_tools()
+  - agent_harness.tools.base.ToolResult
+  - agent_harness.tools.base.BaseTool
+  - agent_harness.tools.base.ToolRegistry
+  - tests/test_tools/*
+skills_authorized:
+  - mcp-tool-builder
+  - tdd-test-runner
+  - strict-typing-contracts
+  - lint-formatting
+  - threat-model-sast
+  - auth-security
+  - secret-credential-scanner
+  - env-config-validator
+status:          active
+started_at:      2026-09-14T00:00:00Z
+last_update:     2026-09-14T00:00:00Z
+# ──────────────────────────────────────────────────────────────
 ```
 
 ### Phase Execution Log
 | Sub-phase | State | Skill ID(s) | Note |
 |---|---|---|---|
-| 1.1 – 5.5 (25 rows) | pending | — | gated: skill dictionary empty |
+| 1.1 ToolResult & helpers | done | mcp-tool-builder, strict-typing-contracts, tdd-test-runner, lint-formatting | helpers populate tool_name/duration_ms, frozen fields verified |
+| 1.2 BaseTool ABC | pending | — | — |
+| 1.3 Execution wrapper R1/R2/R4/R5 | pending | — | — |
+| 1.4 ToolRegistry | pending | — | — |
+| 1.5 Shared test doubles & fixtures | pending | — | — |
+| 2.1 Search provider abstraction | pending | — | — |
+| 2.2 web_search tool | pending | — | — |
+| 2.3 web_scrape tool | pending | — | — |
+| 2.4 Network failure classification | pending | — | — |
+| 2.5 Retrieval tool hardening | pending | — | — |
+| 3.1 CodeSandbox core S3/S4/S5/S6/S8 | pending | — | — |
+| 3.2 Static analysis S1/S2/S7 | pending | — | — |
+| 3.3 code_execute surface | pending | — | — |
+| 3.4 Task-mode code generation | pending | — | — |
+| 3.5 shell_command + whitelist | pending | — | — |
+| 4.1 file_read | pending | — | — |
+| 4.2 Path-safety guard | pending | — | — |
+| 4.3 file_write | pending | — | — |
+| 4.4 csv_process | pending | — | — |
+| 4.5 pdf_export degraded | pending | — | — |
+| 5.1 llm_extract | pending | — | — |
+| 5.2 llm_synthesize | pending | — | — |
+| 5.3 default_tools bundle | pending | — | — |
+| 5.4 Capability tags audit | pending | — | — |
+| 5.5 Hardening & handoff | pending | — | — |
 
 ### Skill Ledger
 | Timestamp (ISO) | Sub-phase | Files | Skill ID(s) | Change summary | Gates passed |
 |---|---|---|---|---|---|
+| 2026-09-14T13:55:00Z | 1.1 | agent_harness/tools/base.py, agent_harness/tools/__init__.py, tests/test_tools/test_toolresult.py | mcp-tool-builder, strict-typing-contracts, tdd-test-runner, lint-formatting | Implement ToolResult per SPEC-001 §2.3 and ok/fail helpers with R4 defaults | tests, ruff, mypy |
 | — | — | — | — | _no source changes permitted yet_ | — |
 
 ### Spec/Skill Change Requests
