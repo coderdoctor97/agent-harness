@@ -1,0 +1,48 @@
+# Spec: SPEC-006 §1. Never put resolved secrets in this file.
+llm:
+  provider: "openai"              # openai | anthropic | local
+  model: "gpt-4o"
+  fallback_model: null            # optional cheaper/alternate model
+  api_key_env: "OPENAI_API_KEY"   # name of env var; never the key itself
+  base_url: null                  # override for local/proxy endpoints
+  max_tokens: 4096
+  temperature: 0.2
+  timeout: 60
+  max_retries: 3
+  cost_per_1k_tokens: null        # optional float, for cost estimates
+
+execution:
+  max_steps: 20
+  step_timeout: 120
+  max_retries: 2
+  retry_backoff: "exponential"    # exponential | linear | fixed
+  retry_base_delay: 2
+  enable_replan: true
+  abort_on_critical_failure: true
+  output_dir: "./output"
+  temp_dir: "./tmp"
+
+search:
+  provider: "duckduckgo"          # serpapi | bing | duckduckgo | google
+  api_key_env: "SEARCH_API_KEY"
+  max_results: 10
+
+security:
+  sandbox_code: true
+  code_timeout: 30
+  max_output_bytes: 1000000
+  network_in_code: false
+  allow_shell: false              # ADDITIVE to vision; shell_command is opt-in
+  sensitive_patterns:
+    - "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+    - "sk-[a-zA-Z0-9]{48}"
+
+logging:
+  level: "INFO"                   # DEBUG | INFO | WARNING | ERROR
+  file: "./logs/agent_harness.log"
+  format: "json"                  # json | text
+  console: true
+
+plugins:
+  dirs: ["./plugins", "~/.agent_harness/plugins"]
+  auto_load: true
