@@ -63,6 +63,82 @@ RAISING_LIFECYCLE_STEPS = frozenset({3, 4, 5})
 CONTAINED_LIFECYCLE_STEPS = frozenset({6, 7, 8})
 
 
+class _SchemaModels:
+    """SPEC-001 § 2 data-model provider backed by Plan 1's real classes.
+
+    This is integration-window step I1's composition swap (SCR-P3-6). Plan 3 builds
+    its plans through a ``ModelProvider`` so the cognition layer never imports Plan 1
+    directly; while Plan 1 was absent the provider defaulted to Plan 3's spec-shaped
+    stand-ins. Now that ``agent_harness.config.schema`` ships the frozen classes, the
+    composition root injects them, so every ``Step``, ``ExecutionPlan``, ``ToolResult``
+    and ``AgentError`` crossing a layer boundary is the single class SPEC-001 assigns
+    to Plan 1.
+
+    Resolution stays lazy per call — ``importlib.import_module`` is cached, so this
+    costs one dict lookup after the first use — which keeps ``import agent_harness``
+    cheap and free of lower-layer imports.
+
+    Spec: SPEC-001 § 1-§ 2 · SPEC-004 § 2 (``ModelProvider``) · SCR-P3-6
+    """
+
+    def step(self, **kwargs: Any) -> Any:
+        """Build a SPEC-001 § 2.1 ``Step``."""
+        schema_module = importlib.import_module("agent_harness.config.schema")
+        return schema_module.Step(**kwargs)
+
+    def plan(self, **kwargs: Any) -> Any:
+        """Build a SPEC-001 § 2.2 ``ExecutionPlan``."""
+        schema_module = importlib.import_module("agent_harness.config.schema")
+        return schema_module.ExecutionPlan(**kwargs)
+
+    def tool_result(
+        self,
+        *,
+        success: bool,
+        output: Any = None,
+        error: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Any:
+        """Build a SPEC-001 § 2.3 ``ToolResult``."""
+        tools_module = importlib.import_module("agent_harness.tools.base")
+        return tools_module.ToolResult(
+            success=success, output=output, error=error, metadata=dict(metadata or {})
+        )
+
+    def agent_error(
+        self,
+        *,
+        code: str,
+        message: str,
+        component: str,
+        step_id: str | None = None,
+        recoverable: bool = False,
+        recovery_action: str | None = None,
+        original_error: str | None = None,
+    ) -> Any:
+        """Build a SPEC-001 § 2.4 ``AgentError`` (an ``Exception``, so raisable)."""
+        schema_module = importlib.import_module("agent_harness.config.schema")
+        return schema_module.AgentError(
+            code=code,
+            message=message,
+            component=component,
+            step_id=step_id,
+            recoverable=recoverable,
+            recovery_action=recovery_action,
+            original_error=original_error,
+        )
+
+    def step_status(self, name: str) -> Any:
+        """Look up a SPEC-001 § 1.1 ``StepStatus`` member by name."""
+        schema_module = importlib.import_module("agent_harness.config.schema")
+        return schema_module.StepStatus[name.upper()]
+
+    def task_priority(self, name: str) -> Any:
+        """Look up a SPEC-001 § 1.2 ``TaskPriority`` member by name."""
+        schema_module = importlib.import_module("agent_harness.config.schema")
+        return schema_module.TaskPriority[name.upper()]
+
+
 @dataclass
 class HarnessResult:
     """The value returned by :meth:`AgentHarness.run`.
@@ -204,8 +280,35 @@ class AgentHarness:
         if self._llm_client is not None:
             return self._llm_client
         llm_module = importlib.import_module("agent_harness.llm")
-        self._llm_client = llm_module.create_llm_client(self.config)
+        try:
+            self._llm_client = llm_module.create_llm_client(self.config)
+        except Exception as exc:
+            raise self._with_remediation(exc) from exc
         return self._llm_client
+
+    @staticmethod
+    def _with_remediation(exc: Exception) -> Exception:
+        """Attach SPEC-005 § 4's remediation text to a credential failure.
+
+        Plan 1's factory names the missing variable; the spec requires the message to
+        also tell the user how to fix it. The text is added once, at the boundary that
+        raises to the user, so the provider message stays provider-shaped.
+        """
+        schema_module = importlib.import_module("agent_harness.config.schema")
+        if (
+            isinstance(exc, schema_module.AgentError)
+            and exc.code == "CONFIG_VALIDATION_FAILED"
+            and "cp .env.example .env" not in exc.message
+        ):
+            remediated: Exception = schema_module.AgentError(
+                code=exc.code,
+                message=(
+                    f"{exc.message}. Remediation: cp .env.example .env and add your key"
+                ),
+                component="harness",
+            )
+            return remediated
+        return exc
 
     def _resolve_logger(self) -> StructuredLogger:
         """Return the injected logger, building and caching one if absent."""
@@ -456,14 +559,37 @@ class AgentHarness:
         self.plugin_errors = list(errors)
 
     def _resolve_planner(self) -> Planner:
-        """Return the injected planner, building and caching one if absent."""
+        """Return the injected planner, building and caching one if absent.
+
+        ``models`` is the I1 swap (SCR-P3-6): the planner builds its ``Step`` and
+        ``ExecutionPlan`` objects through this provider, so injecting
+        :class:`_SchemaModels` makes every plan object Plan 1's real class rather than
+        Plan 3's spec-shaped stand-in. Nothing else about the planner changes.
+        """
         if self._planner is not None:
             return self._planner
         planning_module = importlib.import_module("agent_harness.planning")
         self._planner = planning_module.Planner(
-            self._resolve_llm_client(), self.config, logger=self._resolve_logger()
+            self._resolve_llm_client(),
+            self.config,
+            logger=self._resolve_logger(),
+            models=_SchemaModels(),
         )
         return self._planner
+
+    def _resolve_recovery(self) -> Any:
+        """Return the four-level recovery cascade for the orchestrator (SPEC-003 § 5).
+
+        The cascade is Plan 3's; composing it here is the composition root's job so a
+        transport layer never has to know about it. ``RecoveryManager`` reads
+        ``config.execution.{max_retries,retry_backoff,retry_base_delay,enable_replan}``
+        itself, and ``enable_replan`` is the same switch
+        :meth:`_apply_recovery_policy` honours for fallback tools.
+        """
+        orchestration_module = importlib.import_module("agent_harness.orchestration")
+        return orchestration_module.RecoveryManager(
+            self.config, logger=self._resolve_logger()
+        )
 
     def _resolve_orchestrator(self) -> Orchestrator:
         """Return the injected orchestrator, building and caching one if absent.
@@ -482,6 +608,7 @@ class AgentHarness:
             planner=self._resolve_planner(),
             context_store=None,
             logger=self._resolve_logger(),
+            recovery=self._resolve_recovery(),
         )
         return self._orchestrator
 

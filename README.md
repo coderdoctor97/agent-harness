@@ -10,13 +10,16 @@ transparency and extensibility.
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-> ## 🟡 Repository state: FOUNDATION
-> This repository currently contains **planning, specifications, agent governance, and
-> documentation only — no implementation source code yet.**
+> ## 🟢 Repository state: IMPLEMENTED (v0.1.0, integration in progress)
+> Plans 1–4 are delivered: the configuration and LLM layer, the tool system, the
+> planning/orchestration/recovery layer and the CLI + plugin surface all exist and
+> pass their suites (see each plan's Status Log under `planning/`). Plan 5 (quality,
+> CI, examples, release) has not started, and the integration windows in
+> [`planning/README.md`](planning/README.md) § 4 are how the layers are being proven
+> together.
 >
-> Implementation is additionally **gated**: no source-code change of any size may be made
-> until the [skill dictionary](.agent/skills/skill-dictionary.md) is populated with skill
-> definitions (arriving via a subsequent prompt). See [`.agent/agent.md`](.agent/agent.md) § 6.
+> The **skill gate is satisfied** — the dictionary is populated (50 skills at
+> [`.agent/skill-dictionary/`](.agent/skill-dictionary)); see [`.agent/agent.md`](.agent/agent.md) § 6.
 
 ---
 
@@ -30,7 +33,7 @@ transparency and extensibility.
 6. [Agent Governance & the Skill Mandate](#agent-governance--the-skill-mandate)
 7. [For Agents: How to Start Work](#for-agents-how-to-start-work)
 8. [For Humans: Reading Order](#for-humans-reading-order)
-9. [Planned Usage (after implementation)](#planned-usage-after-implementation)
+9. [Usage](#usage)
 10. [Roadmap](#roadmap)
 11. [License](#license)
 
@@ -217,9 +220,27 @@ The centerpiece is the **skill mandate**:
 
 ---
 
-## Planned Usage (after implementation)
+## Usage
 
-Target interfaces defined by the specs — for orientation only; nothing here is runnable yet.
+### Windows: one click
+
+Double-click **`setup.bat`** once, add your API key to the `.env` it creates, then
+double-click **`start.bat`** any time after that to launch the local web UI in your
+browser. Both scripts are idempotent and leave no background service behind.
+`start.bat /cli` runs tasks in the terminal instead; `start.bat /help` lists the flags.
+
+### Local web UI
+
+```bash
+pip install "agent-harness[web]"
+python -m agent_harness.web          # http://localhost:8765 — browser opens itself
+```
+
+Enter a task, watch the plan execute step by step with live status and a raw event
+log, then read the assembled deliverable, the execution report, the metrics and every
+file the run produced. See [`documentations/web-ui.md`](documentations/web-ui.md) for
+the full guide and [`ADR-001`](documentations/adr/ADR-001-local-web-ui.md) for why it
+is built this way.
 
 ```bash
 # CLI (SPEC-005)
@@ -247,10 +268,11 @@ print(result.status, result.files_created, result.metrics)
 
 | Stage | Content | Status |
 |---|---|---|
-| Foundation | Vision ingested; specs frozen; 5 plans authored; agent governance + skill mandate established | ✅ **This delivery** |
-| Skill population | Skill definitions registered into `.agent/skills/skill-dictionary.md` (subsequent prompt) | ⏳ Next |
-| Parallel implementation | P1–P5 executed concurrently by five agents under skill enforcement | ⬜ Gated |
-| Integration window | Composition swap (I1), full test suite (I2–I3), defect routing (I4) | ⬜ |
+| Foundation | Vision ingested; specs frozen; 5 plans authored; agent governance + skill mandate established | ✅ Done |
+| Skill population | 50 skill definitions registered under `.agent/skill-dictionary/` | ✅ Done |
+| Parallel implementation | P1–P4 executed concurrently by four agents under skill enforcement; P5 not started | 🟡 P1–P4 done (100/125 sub-phases) |
+| Integration window | Composition swap (**I1 done** — commit `993fdac`), full test suite (I2–I3), defect routing (I4) | 🟡 I1 done; I2–I5 pending P5 |
+| Local web UI & Windows on-ramp | `agent_harness.web` (FastAPI + SSE), `setup.bat`, `start.bat` — PRD G8 | ✅ Done (plan 6) |
 | v0.1.0 release | CI green, security review, demos, tag (I5) | ⬜ |
 
 Progress is tracked on the board in [`planning/README.md`](planning/README.md) § 5.

@@ -14,19 +14,21 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-import _p4_stubs as stubs
+import _p4_doubles as doubles
 import pytest
 
 
 @pytest.fixture(autouse=True)
-def _stub_tools() -> Iterator[None]:
-    """Provide ``agent_harness.tools.base`` so plugin imports resolve.
+def _real_tools() -> Iterator[None]:
+    """Assert the plugin tests run against Plan 2's shipped ``BaseTool``.
 
-    Once Plan 2 lands, the real module is importable and the stub steps aside,
-    so these tests exercise the real ``BaseTool`` with no change.
+    These tests import ``agent_harness.tools.base`` from the plugin files they
+    write, so the fixture pins that the real module is the one in play (I1).
     """
-    with stubs.stub_modules():
-        yield
+    import agent_harness.tools as tools_module
+
+    assert tools_module.BaseTool is doubles.BaseTool
+    yield
 
 
 HELLO_PLUGIN = '''"""A minimal example plugin."""
@@ -112,7 +114,7 @@ class TestPluginScanning:
         """Silent to the user, visible in the log."""
         from agent_harness.plugins.loader import _iter_plugin_files
 
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
         missing = tmp_path / "nope"
 
         list(_iter_plugin_files([str(missing)], logger=logger))
@@ -195,7 +197,7 @@ class TestPluginScanning:
 
         error = _load_plugin_module(path)
 
-        assert isinstance(error, stubs.AgentError)
+        assert isinstance(error, doubles.AgentError)
         assert error.code == "PLUGIN_LOAD_FAILED"
         assert error.recoverable is False
         assert "broken.py" in error.message
@@ -210,7 +212,7 @@ class TestPluginScanning:
 
         error = _load_plugin_module(path)
 
-        assert isinstance(error, stubs.AgentError)
+        assert isinstance(error, doubles.AgentError)
         assert error.code == "PLUGIN_LOAD_FAILED"
 
 
@@ -458,7 +460,6 @@ class SecondTool(BaseTool):
 '''
 
 
-@pytest.mark.usefixtures("_stub_tools")
 class TestClassDetection:
     """SPEC-005 § 3 step 3."""
 
@@ -472,7 +473,7 @@ class TestClassDetection:
 
         assert errors == []
         assert [t.name for t in tools] == ["zero_arg"]
-        assert isinstance(tools[0], stubs.BaseTool)
+        assert isinstance(tools[0], doubles.BaseTool)
 
     def test_abstract_subclass_is_skipped(self, tmp_path: Path) -> None:
         """A class with unimplemented abstract methods is not instantiated."""
@@ -534,7 +535,6 @@ class TestClassDetection:
         assert [t.name for t in second] == ["first", "second"]
 
 
-@pytest.mark.usefixtures("_stub_tools")
 class TestInstantiationConventions:
     """SPEC-005 § 3 step 4 — the injection matrix."""
 
@@ -543,7 +543,7 @@ class TestInstantiationConventions:
         from agent_harness.plugins.loader import discover_tools
 
         write_plugin(tmp_path, "cfg.py", CONFIG_PLUGIN)
-        config = stubs.Config()
+        config = doubles.Config()
 
         tools, errors = discover_tools([str(tmp_path)], config=config)
 
@@ -555,7 +555,7 @@ class TestInstantiationConventions:
         from agent_harness.plugins.loader import discover_tools
 
         write_plugin(tmp_path, "llm.py", LLM_PLUGIN)
-        client = stubs.MockLLMClient()
+        client = doubles.MockLLMClient()
 
         tools, errors = discover_tools([str(tmp_path)], llm_client=client)
 
@@ -567,7 +567,7 @@ class TestInstantiationConventions:
         from agent_harness.plugins.loader import discover_tools
 
         write_plugin(tmp_path, "both.py", BOTH_PLUGIN)
-        config, client = stubs.Config(), stubs.MockLLMClient()
+        config, client = doubles.Config(), doubles.MockLLMClient()
 
         tools, _ = discover_tools([str(tmp_path)], config=config, llm_client=client)
 
@@ -750,7 +750,6 @@ class NamedTool(BaseTool):
 '''
 
 
-@pytest.mark.usefixtures("_stub_tools")
 class TestPoisonedPlugins:
     """SPEC-005 § 3 step 6 — a bad plugin is loud but harmless."""
 
@@ -833,7 +832,7 @@ class TestPoisonedPlugins:
         from agent_harness.plugins.loader import discover_tools
 
         write_plugin(tmp_path, "broken.py", SYNTAX_ERROR_PLUGIN)
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
 
         discover_tools([str(tmp_path)], logger=logger)
 
@@ -842,7 +841,6 @@ class TestPoisonedPlugins:
         assert failed[0]["level"] == "WARNING"
 
 
-@pytest.mark.usefixtures("_stub_tools")
 class TestCollisions:
     """SPEC-005 § 3 step 5 — built-ins win."""
 
@@ -852,10 +850,10 @@ class TestCollisions:
 
         write_plugin(tmp_path, "echo.py", hello_tool_named("echo"))
         tools, _ = discover_tools([str(tmp_path)])
-        registry = stubs.ToolRegistry()
-        builtin = stubs.StubEchoTool("echo")
+        registry = doubles.ToolRegistry()
+        builtin = doubles.StubEchoTool("echo")
         registry.register(builtin)
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
 
         kept = register_discovered(registry, tools, logger=logger)
 
@@ -868,9 +866,9 @@ class TestCollisions:
 
         write_plugin(tmp_path, "echo.py", hello_tool_named("echo"))
         tools, _ = discover_tools([str(tmp_path)])
-        registry = stubs.ToolRegistry()
-        registry.register(stubs.StubEchoTool("echo"))
-        logger = stubs.StructuredLogger()
+        registry = doubles.ToolRegistry()
+        registry.register(doubles.StubEchoTool("echo"))
+        logger = doubles.RecordingLogger()
 
         register_discovered(registry, tools, logger=logger)
 
@@ -885,7 +883,7 @@ class TestCollisions:
 
         write_plugin(tmp_path, "fresh.py", hello_tool_named("fresh"))
         tools, _ = discover_tools([str(tmp_path)])
-        registry = stubs.ToolRegistry()
+        registry = doubles.ToolRegistry()
 
         kept = register_discovered(registry, tools)
 
@@ -899,7 +897,7 @@ class TestCollisions:
         write_plugin(tmp_path, "a_first.py", hello_tool_named("dupe"))
         write_plugin(tmp_path, "b_second.py", hello_tool_named("dupe"))
         tools, _ = discover_tools([str(tmp_path)])
-        registry = stubs.ToolRegistry()
+        registry = doubles.ToolRegistry()
 
         kept = register_discovered(registry, tools)
 
@@ -910,15 +908,14 @@ class TestCollisions:
         """Registration order is what protects built-ins: they come first."""
         from agent_harness.plugins.loader import register_discovered
 
-        registry = stubs.ToolRegistry()
-        plugin_tool = stubs.StubEchoTool("late")
+        registry = doubles.ToolRegistry()
+        plugin_tool = doubles.StubEchoTool("late")
 
         kept = register_discovered(registry, [plugin_tool])
 
         assert [t.name for t in kept] == ["late"]
 
 
-@pytest.mark.usefixtures("_stub_tools")
 class TestAutoLoad:
     """SPEC-005 § 3 step 7 — the kill switch."""
 
@@ -929,7 +926,7 @@ class TestAutoLoad:
         # A stem no other test uses: a successful load legitimately caches its
         # module in sys.modules, so the probe must be unique to this test.
         write_plugin(tmp_path, "autoload_probe.py", ZERO_ARG_PLUGIN)
-        config = stubs.Config()
+        config = doubles.Config()
         config.plugins.auto_load = False
 
         tools, errors = discover_tools([str(tmp_path)], config=config)
@@ -943,7 +940,7 @@ class TestAutoLoad:
         from agent_harness.plugins.loader import discover_tools
 
         write_plugin(tmp_path, "zero.py", ZERO_ARG_PLUGIN)
-        config = stubs.Config()
+        config = doubles.Config()
         assert config.plugins.auto_load is True
 
         tools, _ = discover_tools([str(tmp_path)], config=config)
@@ -964,7 +961,7 @@ class TestAutoLoad:
         """The default config names a directory most users never create."""
         from agent_harness.plugins.loader import discover_tools
 
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
 
         tools, errors = discover_tools([str(tmp_path / "absent")], logger=logger)
 
@@ -1008,7 +1005,6 @@ def _load_shipped(name: str) -> Any:
     return module
 
 
-@pytest.mark.usefixtures("_stub_tools")
 class TestShippedExamples:
     """SPEC-005 § 3.1 — the two files Plan 4 ships in ``plugins/``."""
 
@@ -1263,7 +1259,6 @@ def _copyable_plugin_source() -> str:
     return "\n".join(code).strip("\n") + "\n"
 
 
-@pytest.mark.usefixtures("_stub_tools")
 class TestReadmeExampleCompiles:
     """Plan 3.5 exit criterion: the documented example is working code."""
 
@@ -1277,7 +1272,7 @@ class TestReadmeExampleCompiles:
         assert errors == []
         assert [t.name for t in tools] == ["word_count"]
 
-        registry = stubs.ToolRegistry()
+        registry = doubles.ToolRegistry()
         registered = register_discovered(registry, tools)
 
         assert [t.name for t in registered] == ["word_count"]

@@ -2,7 +2,7 @@
 
 Owned by Plan 4 (SPEC-000 § 3.4). Deterministic: no network, no live LLM calls, no
 wall-clock dependence (SPEC-000 § 5.2/§ 5.5). Plans 1-3 modules are supplied as
-spec-shaped stubs by ``tests/_p4_stubs.py`` until integration-window step I1.
+the real Plan 1-3 modules, with collaborator doubles from ``tests/_p4_doubles.py``.
 
 Spec: SPEC-005 § 1 · SPEC-001 § 2 · SPEC-000 § 5
 """
@@ -15,11 +15,10 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-import _p4_stubs as stubs
+import _p4_doubles as doubles
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -41,13 +40,6 @@ OPTIONAL_DEPENDENCIES = (
 def _fake_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     """Give every test an obviously-fake key; tests may delete it to go keyless."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-a-secret")
-
-
-@pytest.fixture()
-def stubbed() -> Iterator[list[str]]:
-    """Install the Plan 1-3 stub modules under their real dotted names."""
-    with stubs.stub_modules() as installed:
-        yield installed
 
 
 # ---------------------------------------------------------------------------
@@ -178,8 +170,8 @@ class TestHarnessResult:
         """Every field round-trips without coercion."""
         from agent_harness.harness import HarnessResult
 
-        plan = stubs.ExecutionPlan(id="plan-1", original_prompt="do a thing")
-        metrics = stubs.ExecutionMetrics(
+        plan = doubles.ExecutionPlan(id="plan-1", original_prompt="do a thing")
+        metrics = doubles.ExecutionMetrics(
             plan_id="plan-1",
             prompt_length=9,
             total_steps=2,
@@ -192,6 +184,9 @@ class TestHarnessResult:
             llm_calls=1,
             llm_tokens_used=15,
             llm_estimated_cost=0.001,
+            tools_used=["web_search"],
+            files_created=["output/a.md"],
+            errors=[],
         )
         result = HarnessResult(
             status="completed",
@@ -213,7 +208,7 @@ class TestHarnessResult:
         """``errors`` mirrors ``context['errors']`` — plain JSON-safe dicts."""
         from agent_harness.harness import HarnessResult
 
-        error = stubs.AgentError(
+        error = doubles.AgentError(
             code="TOOL_EXECUTION_FAILED",
             message="boom",
             component="tools",
@@ -222,8 +217,8 @@ class TestHarnessResult:
         result = HarnessResult(
             status="failed",
             final_output=None,
-            plan=stubs.ExecutionPlan(),
-            metrics=stubs.ExecutionMetrics(
+            plan=doubles.ExecutionPlan(),
+            metrics=doubles.ExecutionMetrics(
                 plan_id="p",
                 prompt_length=0,
                 total_steps=1,
@@ -236,6 +231,9 @@ class TestHarnessResult:
                 llm_calls=0,
                 llm_tokens_used=0,
                 llm_estimated_cost=0.0,
+                tools_used=[],
+                files_created=[],
+                errors=[error.to_dict()],
             ),
             files_created=[],
             errors=[error.to_dict()],
@@ -246,38 +244,38 @@ class TestHarnessResult:
 
 
 # ---------------------------------------------------------------------------
-# Stub layer sanity — the parallel-work seam itself
+# Integration-window sanity — the swap has happened (I1)
 # ---------------------------------------------------------------------------
 
 
-class TestStubModuleSeam:
-    """The mechanism that makes the integration-window swap a no-op."""
+class TestRealModuleSeam:
+    """After I1 the composition root composes the real Plan 1-3 modules.
 
-    def test_stubs_install_under_real_dotted_names(self, stubbed: list[str]) -> None:
-        """``from agent_harness.tools.base import BaseTool`` resolves with no Plan 2."""
-        from agent_harness.tools.base import BaseTool
+    The stub-era assertions this class replaces (SCR-P4-11) compared *identity*
+    with ``tests/_p4_stubs.py`` objects, which can only hold while the real modules
+    are unimportable. These assertions pin the post-swap truth instead: every name
+    Plan 4 resolves is the shipped class, and no fabricating module is loaded.
+    """
 
-        assert BaseTool is stubs.BaseTool
-        assert "agent_harness.tools.base" in stubbed
+    def test_every_resolved_name_is_the_shipped_object(self) -> None:
+        """Plan 4's doubles are the real classes, not stand-ins (SPEC-000 § 2)."""
+        import agent_harness.config as config_module
+        import agent_harness.orchestration as orchestration_module
+        import agent_harness.planning as planning_module
+        import agent_harness.tools as tools_module
 
-    def test_stubs_are_removed_on_exit(self) -> None:
-        """Exiting the context manager restores ``sys.modules`` (no leakage)."""
-        with stubs.stub_modules():
-            assert "agent_harness.orchestration.assembler" in sys.modules
-        assert "agent_harness.orchestration.assembler" not in sys.modules
+        assert tools_module.BaseTool is doubles.BaseTool
+        assert tools_module.ToolRegistry is doubles.ToolRegistry
+        assert config_module.Config is doubles.Config
+        assert config_module.AgentError is doubles.AgentError
+        assert planning_module.Planner is doubles.Planner
+        assert orchestration_module.Orchestrator is doubles.Orchestrator
+        assert orchestration_module.Assembler is doubles.Assembler
 
-    def test_real_module_wins_over_stub(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """If the real module is importable the stub steps aside — the I1 behaviour."""
-        monkeypatch.setattr(
-            stubs,
-            "real_module_available",
-            lambda name: name == "agent_harness.tools.base",
-        )
-        with stubs.stub_modules(
-            {"agent_harness.tools.base": {"BaseTool": stubs.BaseTool}}
-        ):
-            pass  # nothing installed for that name; assert below
-        assert "agent_harness.tools.base" not in sys.modules
+    def test_the_pristine_stand_ins_are_gone(self) -> None:
+        """No test-only module fabricates ``agent_harness.*`` names any more."""
+        assert not hasattr(doubles, "stub_modules")
+        assert "_p4_stubs" not in sys.modules
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +283,6 @@ class TestStubModuleSeam:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestHarnessConstruction:
     """SPEC-005 § 1 — constructor and ``from_config``."""
 
@@ -293,19 +290,42 @@ class TestHarnessConstruction:
         """The documented single-argument constructor works."""
         from agent_harness import AgentHarness
 
-        harness = AgentHarness(stubs.Config())
+        harness = AgentHarness(doubles.Config())
         assert harness.config is not None
 
     def test_from_config_returns_a_harness(self, tmp_path: Path) -> None:
-        """``from_config(path)`` is a classmethod producing the same type."""
+        """``from_config(path)`` is a classmethod producing the same type.
+
+        Post-I1 this reads a real YAML file through Plan 1's loader, so the file has
+        to exist; the stub-era version of this test passed a missing path, which the
+        shipped loader correctly rejects with ``CONFIG_LOAD_FAILED`` (SCR-P4-11).
+        """
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
-        config.execution.output_dir = str(tmp_path / "out")
-        config.execution.temp_dir = str(tmp_path / "tmp")
-        harness = AgentHarness.from_config(str(tmp_path / "missing.yaml"))
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "execution:\n"
+            f"  output_dir: {tmp_path / 'out'}\n"
+            f"  temp_dir: {tmp_path / 'tmp'}\n"
+            "logging:\n"
+            "  level: WARNING\n",
+            encoding="utf-8",
+        )
+
+        harness = AgentHarness.from_config(str(config_file))
+
         assert isinstance(harness, AgentHarness)
-        assert config is not harness.config
+        assert harness.config.execution.output_dir == str(tmp_path / "out")
+        assert harness.config.logging.level == "WARNING"
+
+    def test_from_config_rejects_a_missing_path(self, tmp_path: Path) -> None:
+        """An *explicit* path that does not exist is a load error, not defaults."""
+        from agent_harness import AgentHarness
+
+        with pytest.raises(doubles.AgentError) as excinfo:
+            AgentHarness.from_config(str(tmp_path / "missing.yaml"))
+
+        assert excinfo.value.code == "CONFIG_LOAD_FAILED"
 
     def test_from_config_default_path_is_the_documented_one(self) -> None:
         """SPEC-005 § 1: the default is ``./config.yaml``."""
@@ -323,13 +343,12 @@ class TestHarnessConstruction:
         from agent_harness import AgentHarness
 
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(tmp_path / "out")
         config.execution.temp_dir = str(tmp_path / "tmp")
         AgentHarness(config)  # must not raise
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestOutputDirectories:
     """SPEC-005 § 1.2 — output/temp directory management at init."""
 
@@ -338,7 +357,7 @@ class TestOutputDirectories:
         from agent_harness import AgentHarness
 
         out, tmp = tmp_path / "nested" / "out", tmp_path / "nested" / "tmp"
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(out)
         config.execution.temp_dir = str(tmp)
         AgentHarness(config)
@@ -353,21 +372,20 @@ class TestOutputDirectories:
         out.mkdir()
         marker = out / "keep.txt"
         marker.write_text("keep", encoding="utf-8")
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(out)
         config.execution.temp_dir = str(tmp_path / "tmp")
         AgentHarness(config)
         assert marker.read_text(encoding="utf-8") == "keep"
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestInjectionSeams:
     """Sub-phase 1.2 — the five documented test seams are honoured end-to-end."""
 
     SEAMS = ("llm_client", "planner", "orchestrator", "assembler", "registry")
 
     def _config(self, tmp_path: Path) -> Any:
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(tmp_path / "out")
         config.execution.temp_dir = str(tmp_path / "tmp")
         return config
@@ -396,7 +414,6 @@ class TestInjectionSeams:
     ) -> None:
         """An injected client means ``create_llm_client`` is never called."""
         import agent_harness.llm as llm_module
-
         from agent_harness import AgentHarness
 
         calls: list[Any] = []
@@ -408,14 +425,13 @@ class TestInjectionSeams:
 
         llm_module.create_llm_client = _counting
         try:
-            client = stubs.MockLLMClient()
+            client = doubles.MockLLMClient()
             harness = AgentHarness(self._config(tmp_path), llm_client=client)
             assert harness._resolve_llm_client() is client
             assert calls == []
         finally:
             llm_module.create_llm_client = original
 
-    @pytest.mark.usefixtures("stubbed")
     def test_missing_api_key_raises_with_remediation(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -424,7 +440,7 @@ class TestInjectionSeams:
 
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         harness = AgentHarness(self._config(tmp_path))
-        with pytest.raises(stubs.AgentError) as excinfo:
+        with pytest.raises(doubles.AgentError) as excinfo:
             harness._resolve_llm_client()
         error = excinfo.value
         assert error.code == "CONFIG_VALIDATION_FAILED"
@@ -434,12 +450,15 @@ class TestInjectionSeams:
     def test_absent_seams_are_built_from_the_real_module_paths(
         self, tmp_path: Path
     ) -> None:
-        """With no injection the real (stub-backed) factory supplies the client."""
+        """With no injection, Plan 1's factory supplies the real client (I1)."""
+        import agent_harness.llm as llm_module
         from agent_harness import AgentHarness
 
         harness = AgentHarness(self._config(tmp_path))
         client = harness._resolve_llm_client()
-        assert isinstance(client, stubs.MockLLMClient)
+
+        assert isinstance(client, llm_module.LLMClient)
+        assert type(client).__module__.startswith("agent_harness.llm")
         assert harness._resolve_llm_client() is client  # cached, not rebuilt
 
 
@@ -448,49 +467,28 @@ class TestInjectionSeams:
 # ---------------------------------------------------------------------------
 
 
-class _FixedPlanner(stubs.Planner):
+class _FixedPlanner(doubles.StubPlanner):
     """A planner that always returns a fixed plan, recording what it was asked."""
 
-    def __init__(self, plan: stubs.ExecutionPlan) -> None:
-        """Seed the canned plan."""
-        super().__init__(stubs.MockLLMClient(), stubs.Config())
-        self._plan = plan
-        self.calls: list[dict[str, Any]] = []
-
-    @property
-    def prompts(self) -> list[str]:
-        """Prompts this planner was asked about, in order."""
-        return [call["prompt"] for call in self.calls]
-
-    def plan(
-        self,
-        prompt: str,
-        available_tools: list[dict[str, Any]],
-        *,
-        context: dict[str, Any] | None = None,
-    ) -> stubs.ExecutionPlan:
-        """Record the full call and return the canned plan."""
-        self.calls.append(
-            {"prompt": prompt, "available_tools": available_tools, "context": context}
-        )
-        return self._plan
+    def __init__(self, plan: doubles.ExecutionPlan) -> None:
+        """Seed the canned plan (returned by identity, hence ``fresh=False``)."""
+        super().__init__(plan, fresh=False)
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestPlanOnly:
     """SPEC-005 § 1 — ``plan()`` plans without executing."""
 
     def _harness(self, tmp_path: Path, **seams: Any) -> Any:
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(tmp_path / "out")
         config.execution.temp_dir = str(tmp_path / "tmp")
         return AgentHarness(config, **seams)
 
     def test_returns_the_planner_execution_plan(self, tmp_path: Path) -> None:
         """The object the planner produced is the object returned."""
-        plan = stubs.ExecutionPlan(id="plan-9", original_prompt="do it")
+        plan = doubles.ExecutionPlan(id="plan-9", original_prompt="do it")
         planner = _FixedPlanner(plan)
         harness = self._harness(tmp_path, planner=planner)
 
@@ -499,23 +497,24 @@ class TestPlanOnly:
 
     def test_executes_zero_tools(self, tmp_path: Path) -> None:
         """Planning must not run anything — asserted through a counting tool."""
-        counting = stubs.StubEchoTool("web_search")
-        registry = stubs.ToolRegistry()
+        counting = doubles.StubEchoTool("web_search")
+        registry = doubles.ToolRegistry()
         registry.register(counting)
-        harness = self._harness(tmp_path, registry=registry)
+        planner = doubles.StubPlanner(doubles.one_step_plan(tool="web_search"))
+        harness = self._harness(tmp_path, registry=registry, planner=planner)
 
         result = harness.plan("Research something and write a file")
 
-        assert isinstance(result, stubs.ExecutionPlan)
+        assert isinstance(result, doubles.ExecutionPlan)
         assert counting.execute_calls == 0
         assert counting.cleanup_calls == 0
 
     def test_planner_receives_the_registry_tool_list(self, tmp_path: Path) -> None:
         """SPEC-005 § 1.1 step 5 — the planner is handed the available tools."""
-        registry = stubs.ToolRegistry()
-        registry.register(stubs.StubEchoTool("web_search"))
-        registry.register(stubs.StubEchoTool("file_write"))
-        planner = stubs.Planner(stubs.MockLLMClient(), stubs.Config())
+        registry = doubles.ToolRegistry()
+        registry.register(doubles.StubEchoTool("web_search"))
+        registry.register(doubles.StubEchoTool("file_write"))
+        planner = doubles.StubPlanner()
         harness = self._harness(tmp_path, registry=registry, planner=planner)
 
         harness.plan("a task")
@@ -529,21 +528,38 @@ class TestPlanOnly:
     def test_rejects_an_empty_prompt(self, tmp_path: Path) -> None:
         """Prompt validation is shared with ``run()`` (SPEC-005 § 1.1 step 1)."""
         harness = self._harness(tmp_path)
-        with pytest.raises(stubs.AgentError) as excinfo:
+        with pytest.raises(doubles.AgentError) as excinfo:
             harness.plan("   ")
         assert excinfo.value.code == "PROMPT_INVALID"
 
-    def test_plans_against_real_module_paths_when_nothing_is_injected(
-        self, tmp_path: Path
-    ) -> None:
-        """No seams injected: planner, registry and client all come from the stubs."""
-        harness = self._harness(tmp_path)
+    def test_the_real_planner_builds_real_model_objects(self, tmp_path: Path) -> None:
+        """SCR-P3-6 at I1: no planner injected → Plan 1's classes come back.
+
+        Plan 3's planner builds its plan through an injected ``ModelProvider``. The
+        composition root supplies :class:`_SchemaModels`, so the returned plan and its
+        steps are the SPEC-001 classes owned by Plan 1 — not Plan 3's stand-ins.
+        """
+        payload = {
+            "steps": [
+                {
+                    "description": "search the web",
+                    "tool_hint": "web_search",
+                    "input_data": {"query": "Research a topic"},
+                    "priority": "high",
+                }
+            ]
+        }
+        harness = self._harness(tmp_path, llm_client=doubles.MockLLMClient([payload]))
 
         plan = harness.plan("Research a topic")
 
-        assert isinstance(plan, stubs.ExecutionPlan)
+        assert isinstance(plan, doubles.ExecutionPlan)
+        assert type(plan).__module__ == "agent_harness.config.schema"
+        assert type(plan.steps[0]).__module__ == "agent_harness.config.schema"
         assert plan.original_prompt == "Research a topic"
         assert len(plan.steps) == 1
+        assert plan.steps[0].tool_hint == "web_search"
+        assert plan.steps[0].priority is doubles.TaskPriority.HIGH
 
 
 # ---------------------------------------------------------------------------
@@ -551,25 +567,24 @@ class TestPlanOnly:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestRuntimeToolRegistration:
     """SPEC-005 § 1/§ 5 — ``register_tool`` and ``list_tools``."""
 
     def _harness(self, tmp_path: Path, **seams: Any) -> Any:
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(tmp_path / "out")
         config.execution.temp_dir = str(tmp_path / "tmp")
         return AgentHarness(config, **seams)
 
     def test_register_then_list(self, tmp_path: Path) -> None:
         """A registered tool appears in ``list_tools()``."""
-        registry = stubs.ToolRegistry()
-        registry.register(stubs.StubEchoTool("web_search"))
+        registry = doubles.ToolRegistry()
+        registry.register(doubles.StubEchoTool("web_search"))
         harness = self._harness(tmp_path, registry=registry)
 
-        harness.register_tool(stubs.StubEchoTool("my_custom_tool"))
+        harness.register_tool(doubles.StubEchoTool("my_custom_tool"))
         names = [t["name"] for t in harness.list_tools()]
 
         assert "my_custom_tool" in names
@@ -577,8 +592,8 @@ class TestRuntimeToolRegistration:
 
     def test_list_tools_delegates_to_the_registry(self, tmp_path: Path) -> None:
         """``list_tools()`` returns the registry's own dicts, unchanged."""
-        registry = stubs.ToolRegistry()
-        tool = stubs.StubEchoTool("web_search")
+        registry = doubles.ToolRegistry()
+        tool = doubles.StubEchoTool("web_search")
         registry.register(tool)
         harness = self._harness(tmp_path, registry=registry)
 
@@ -587,7 +602,7 @@ class TestRuntimeToolRegistration:
 
     def test_rejects_a_non_tool_object(self, tmp_path: Path) -> None:
         """SPEC-002 G1 passes straight through: ``TypeError`` for a non-tool."""
-        registry = stubs.ToolRegistry()
+        registry = doubles.ToolRegistry()
         harness = self._harness(tmp_path, registry=registry)
 
         with pytest.raises(TypeError):
@@ -595,22 +610,22 @@ class TestRuntimeToolRegistration:
 
     def test_rejects_a_tool_class_rather_than_an_instance(self, tmp_path: Path) -> None:
         """The guard is on instances, not classes."""
-        harness = self._harness(tmp_path, registry=stubs.ToolRegistry())
+        harness = self._harness(tmp_path, registry=doubles.ToolRegistry())
 
         with pytest.raises(TypeError):
-            harness.register_tool(stubs.StubEchoTool)
+            harness.register_tool(doubles.StubEchoTool)
 
     def test_registration_after_a_run_affects_later_runs_only(
         self, tmp_path: Path
     ) -> None:
         """SPEC-005 § 5 — the earlier plan never saw the late-registered tool."""
-        planner = _FixedPlanner(stubs.ExecutionPlan(id="p", original_prompt="t"))
-        registry = stubs.ToolRegistry()
-        registry.register(stubs.StubEchoTool("web_search"))
+        planner = _FixedPlanner(doubles.ExecutionPlan(id="p", original_prompt="t"))
+        registry = doubles.ToolRegistry()
+        registry.register(doubles.StubEchoTool("web_search"))
         harness = self._harness(tmp_path, registry=registry, planner=planner)
 
         harness.plan("first task")
-        harness.register_tool(stubs.StubEchoTool("late_tool"))
+        harness.register_tool(doubles.StubEchoTool("late_tool"))
         harness.plan("second task")
 
         first = [t["name"] for t in planner.calls[0]["available_tools"]]
@@ -620,10 +635,10 @@ class TestRuntimeToolRegistration:
 
     def test_registration_before_first_use_is_visible(self, tmp_path: Path) -> None:
         """Registering before any run lands in the same registry the planner sees."""
-        planner = _FixedPlanner(stubs.ExecutionPlan(id="p", original_prompt="t"))
+        planner = _FixedPlanner(doubles.ExecutionPlan(id="p", original_prompt="t"))
         harness = self._harness(tmp_path, planner=planner)
 
-        harness.register_tool(stubs.StubEchoTool("early_tool"))
+        harness.register_tool(doubles.StubEchoTool("early_tool"))
         harness.plan("a task")
 
         names = [t["name"] for t in planner.calls[0]["available_tools"]]
@@ -631,11 +646,11 @@ class TestRuntimeToolRegistration:
 
     def test_reregistering_a_name_overwrites(self, tmp_path: Path) -> None:
         """SPEC-002 G2 — the last registration wins."""
-        registry = stubs.ToolRegistry()
-        registry.register(stubs.StubEchoTool("shared"))
+        registry = doubles.ToolRegistry()
+        registry.register(doubles.StubEchoTool("shared"))
         harness = self._harness(tmp_path, registry=registry)
 
-        harness.register_tool(stubs.StubEchoTool("shared"))
+        harness.register_tool(doubles.StubEchoTool("shared"))
 
         assert [t["name"] for t in harness.list_tools()].count("shared") == 1
 
@@ -645,14 +660,13 @@ class TestRuntimeToolRegistration:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestPromptValidation:
     """SPEC-005 § 1.1 step 1 — the input gate, shared by ``run()`` and ``plan()``."""
 
     def _harness(self, tmp_path: Path) -> Any:
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(tmp_path / "out")
         config.execution.temp_dir = str(tmp_path / "tmp")
         return AgentHarness(config)
@@ -663,7 +677,7 @@ class TestPromptValidation:
     ) -> None:
         """A prompt that is blank after stripping is rejected."""
         harness = self._harness(tmp_path)
-        with pytest.raises(stubs.AgentError) as excinfo:
+        with pytest.raises(doubles.AgentError) as excinfo:
             harness.plan(prompt)
         assert excinfo.value.code == "PROMPT_INVALID"
         assert excinfo.value.component == "harness"
@@ -672,7 +686,7 @@ class TestPromptValidation:
     def test_rejects_non_string_prompts(self, tmp_path: Path, prompt: Any) -> None:
         """The gate never lets a non-string through to the LLM."""
         harness = self._harness(tmp_path)
-        with pytest.raises(stubs.AgentError) as excinfo:
+        with pytest.raises(doubles.AgentError) as excinfo:
             harness.plan(prompt)
         assert excinfo.value.code == "PROMPT_INVALID"
 
@@ -681,7 +695,7 @@ class TestPromptValidation:
         from agent_harness.harness import MAX_PROMPT_CHARS
 
         harness = self._harness(tmp_path)
-        planner = _FixedPlanner(stubs.ExecutionPlan(id="p", original_prompt="x"))
+        planner = _FixedPlanner(doubles.ExecutionPlan(id="p", original_prompt="x"))
         harness._planner = planner
 
         harness.plan("a" * MAX_PROMPT_CHARS)
@@ -693,7 +707,7 @@ class TestPromptValidation:
         from agent_harness.harness import MAX_PROMPT_CHARS
 
         harness = self._harness(tmp_path)
-        with pytest.raises(stubs.AgentError) as excinfo:
+        with pytest.raises(doubles.AgentError) as excinfo:
             harness.plan("a" * (MAX_PROMPT_CHARS + 1))
         error = excinfo.value
         assert error.code == "PROMPT_INVALID"
@@ -711,7 +725,7 @@ class TestPromptValidation:
         from agent_harness.harness import MAX_PROMPT_CHARS
 
         harness = self._harness(tmp_path)
-        with pytest.raises(stubs.AgentError):
+        with pytest.raises(doubles.AgentError):
             harness.plan("  " + "a" * MAX_PROMPT_CHARS + "  ")
 
     def test_multibyte_characters_count_as_one(self, tmp_path: Path) -> None:
@@ -719,7 +733,7 @@ class TestPromptValidation:
         from agent_harness.harness import MAX_PROMPT_CHARS
 
         harness = self._harness(tmp_path)
-        harness._planner = _FixedPlanner(stubs.ExecutionPlan(id="p"))
+        harness._planner = _FixedPlanner(doubles.ExecutionPlan(id="p"))
 
         harness.plan("é" * MAX_PROMPT_CHARS)  # 2 bytes each; must still be accepted
 
@@ -749,14 +763,13 @@ class TestErrorPropagationPolicy:
         assert not RAISING_LIFECYCLE_STEPS & CONTAINED_LIFECYCLE_STEPS
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestContainedFailureResult:
     """SPEC-005 § 1.1/§ 1.2 — a contained failure still returns a result."""
 
     def _harness(self, tmp_path: Path) -> Any:
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(tmp_path / "out")
         config.execution.temp_dir = str(tmp_path / "tmp")
         return AgentHarness(config)
@@ -764,7 +777,7 @@ class TestContainedFailureResult:
     def test_failure_result_carries_the_status_and_errors(self, tmp_path: Path) -> None:
         """The result is ``failed`` and its ``errors`` mirror the context."""
         harness = self._harness(tmp_path)
-        plan = stubs.ExecutionPlan(id="p1", original_prompt="task")
+        plan = doubles.ExecutionPlan(id="p1", original_prompt="task")
         errors = [
             {
                 "step_id": "step_0",
@@ -785,14 +798,14 @@ class TestContainedFailureResult:
         """The assembler's ``partial`` verdict is not flattened to ``failed``."""
         harness = self._harness(tmp_path)
         result = harness._failure_result(
-            stubs.ExecutionPlan(id="p"), [], status="partial"
+            doubles.ExecutionPlan(id="p"), [], status="partial"
         )
         assert result.status == "partial"
 
     def test_files_created_is_deduplicated_and_ordered(self, tmp_path: Path) -> None:
         """SPEC-005 § 1.2 — mirrors ``context['files_created']``, deduped, in order."""
         harness = self._harness(tmp_path)
-        plan = stubs.ExecutionPlan(id="p")
+        plan = doubles.ExecutionPlan(id="p")
         plan.context["files_created"] = ["b.md", "a.md", "b.md", "c.md"]
 
         result = harness._failure_result(plan, [])
@@ -802,7 +815,7 @@ class TestContainedFailureResult:
     def test_missing_metrics_are_zeroed_not_absent(self, tmp_path: Path) -> None:
         """A contained failure still yields a well-formed metrics object."""
         harness = self._harness(tmp_path)
-        plan = stubs.ExecutionPlan(id="p7", original_prompt="a task")
+        plan = doubles.ExecutionPlan(id="p7", original_prompt="a task")
 
         result = harness._failure_result(plan, [])
 
@@ -828,14 +841,13 @@ FROZEN_CONTEXT_KEYS = {
 }
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestStartupSequence:
     """SPEC-005 § 1.1 steps 1-4 — validate, fresh context, client, registry."""
 
     def _harness(self, tmp_path: Path, **seams: Any) -> Any:
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(tmp_path / "out")
         config.execution.temp_dir = str(tmp_path / "tmp")
         return AgentHarness(config, **seams)
@@ -922,7 +934,7 @@ class TestStartupSequence:
 
         llm_tool = harness._registry.get("llm_synthesize")
         assert llm_tool is not None
-        assert llm_tool.injected_llm_client is harness._llm_client
+        assert llm_tool._llm_client is harness._llm_client
 
     def test_each_prepare_produces_a_fresh_context(self, tmp_path: Path) -> None:
         """SPEC-005 § 1.1 step 2 — a fresh ContextStore per run, no leakage."""
@@ -940,7 +952,7 @@ class TestStartupSequence:
     ) -> None:
         """SPEC-005 § 1.1 step 4 — built-ins plus runtime tools."""
         harness = self._harness(tmp_path)
-        harness.register_tool(stubs.StubEchoTool("custom_tool"))
+        harness.register_tool(doubles.StubEchoTool("custom_tool"))
 
         harness._prepare_run("a task", None)
 
@@ -964,7 +976,7 @@ class TestStartupSequence:
         llm_module.create_llm_client = _client
         try:
             harness = self._harness(tmp_path)
-            with pytest.raises(stubs.AgentError):
+            with pytest.raises(doubles.AgentError):
                 harness._prepare_run("   ", None)
         finally:
             llm_module.create_llm_client = real_client
@@ -977,11 +989,11 @@ class TestStartupSequence:
 # ---------------------------------------------------------------------------
 
 
-class _TwoStepPlanner(stubs.Planner):
+class _TwoStepPlanner(doubles.Planner):
     """Plans one step against a working tool and one against a failing tool."""
 
     def __init__(
-        self, llm_client: stubs.LLMClient, config: stubs.Config, **kwargs: Any
+        self, llm_client: doubles.LLMClient, config: doubles.Config, **kwargs: Any
     ) -> None:
         """Store collaborators and start the call log."""
         super().__init__(llm_client, config, **kwargs)
@@ -993,67 +1005,82 @@ class _TwoStepPlanner(stubs.Planner):
         available_tools: list[dict[str, Any]],
         *,
         context: dict[str, Any] | None = None,
-    ) -> stubs.ExecutionPlan:
+    ) -> doubles.ExecutionPlan:
         """Return a two-step plan so one step can succeed and one can fail."""
         self.calls.append(
             {"prompt": prompt, "available_tools": available_tools, "context": context}
         )
-        return stubs.ExecutionPlan(
+        return doubles.ExecutionPlan(
             original_prompt=prompt,
             steps=[
-                stubs.Step(id="step_0", description="works", tool_hint="good_tool"),
-                stubs.Step(id="step_1", description="fails", tool_hint="bad_tool"),
+                doubles.Step(id="step_0", description="works", tool_hint="good_tool"),
+                doubles.Step(id="step_1", description="fails", tool_hint="bad_tool"),
             ],
         )
 
 
-class _ExplodingOrchestrator(stubs.Orchestrator):
+class _ExplodingOrchestrator(doubles.Orchestrator):
     """An orchestrator whose ``execute`` always fails, for containment tests."""
 
     def __init__(self, message: str = "orchestrator exploded") -> None:
         """Store the message to raise."""
-        super().__init__(stubs.ToolRegistry(), stubs.Config())
+        super().__init__(doubles.ToolRegistry(), doubles.Config())
         self._message = message
-        self.plans: list[stubs.ExecutionPlan] = []
+        self.plans: list[doubles.ExecutionPlan] = []
 
     @property
     def calls(self) -> int:
         """How many times ``execute`` was invoked."""
         return len(self.plans)
 
-    def execute(self, plan: stubs.ExecutionPlan) -> stubs.ExecutionPlan:
+    def execute(self, plan: doubles.ExecutionPlan) -> doubles.ExecutionPlan:
         """Record the plan, then raise."""
         self.plans.append(plan)
         raise RuntimeError(self._message)
 
 
-class _ExplodingAssembler(stubs.Assembler):
+class _ExplodingAssembler(doubles.Assembler):
     """An assembler whose ``assemble`` always fails."""
 
     def __init__(self) -> None:
         """No collaborators needed."""
-        super().__init__(stubs.Config())
-        self.seen: list[tuple[stubs.ExecutionPlan, dict[str, Any]]] = []
+        super().__init__(doubles.Config())
+        self.seen: list[tuple[doubles.ExecutionPlan, dict[str, Any]]] = []
 
     def assemble(
-        self, plan: stubs.ExecutionPlan, context: dict[str, Any]
-    ) -> stubs.AssemblyResult:
+        self, plan: doubles.ExecutionPlan, context: dict[str, Any]
+    ) -> doubles.AssemblyResult:
         """Record the call, then raise."""
         self.seen.append((plan, context))
         raise RuntimeError("assembler exploded")
 
 
-@pytest.mark.usefixtures("stubbed")
+def _plumbing_seams() -> dict[str, Any]:
+    """The default collaborator doubles for pipeline tests.
+
+    Every test in :class:`TestRunPipeline` exercises the *harness's* lifecycle, so
+    the plan is scripted and the tools are echo doubles: no LLM round, no network.
+    A test that wants the real planner or registry simply overrides the seam.
+    """
+    return {
+        "llm_client": doubles.MockLLMClient(),
+        "registry": doubles.stub_registry(),
+        "planner": doubles.StubPlanner(doubles.one_step_plan(tool="web_search")),
+    }
+
+
 class TestRunPipeline:
     """SPEC-005 § 1.1 steps 5-9."""
 
     def _harness(self, tmp_path: Path, **seams: Any) -> Any:
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(tmp_path / "out")
         config.execution.temp_dir = str(tmp_path / "tmp")
-        return AgentHarness(config, **seams)
+        merged = _plumbing_seams()
+        merged.update(seams)
+        return AgentHarness(config, **merged)
 
     def test_completed_run_returns_assembled_output(self, tmp_path: Path) -> None:
         """A fully successful run reports ``completed`` with the assembly output."""
@@ -1062,8 +1089,8 @@ class TestRunPipeline:
         result = harness.run("Research a topic and write a summary")
 
         assert result.status == "completed"
-        assert "Research a topic" in str(result.final_output)
-        assert isinstance(result.plan, stubs.ExecutionPlan)
+        assert "do the thing" in str(result.final_output)
+        assert isinstance(result.plan, doubles.ExecutionPlan)
         assert result.metrics.total_steps == 1
         assert result.metrics.successful_steps == 1
         assert result.errors == []
@@ -1077,13 +1104,13 @@ class TestRunPipeline:
 
     def test_partial_status_is_reported_as_partial(self, tmp_path: Path) -> None:
         """SPEC-003 § 6 rule 3 — a deliverable with a missing step is ``partial``."""
-        registry = stubs.ToolRegistry()
-        registry.register(stubs.StubEchoTool("good_tool"))
-        registry.register(stubs.StubEchoTool("bad_tool", fail=True))
+        registry = doubles.ToolRegistry()
+        registry.register(doubles.StubEchoTool("good_tool"))
+        registry.register(doubles.StubEchoTool("bad_tool", fail=True))
         harness = self._harness(
             tmp_path,
             registry=registry,
-            planner=_TwoStepPlanner(stubs.MockLLMClient(), stubs.Config()),
+            planner=_TwoStepPlanner(doubles.MockLLMClient(), doubles.Config()),
         )
 
         result = harness.run("a task")
@@ -1095,12 +1122,12 @@ class TestRunPipeline:
 
     def test_no_deliverable_at_all_reports_failed(self, tmp_path: Path) -> None:
         """SPEC-003 § 6 rule 4 — nothing produced means ``failed``, not ``partial``."""
-        registry = stubs.ToolRegistry()
-        registry.register(stubs.StubEchoTool("bad_tool", fail=True))
+        registry = doubles.ToolRegistry()
+        registry.register(doubles.StubEchoTool("bad_tool", fail=True))
         harness = self._harness(
             tmp_path,
             registry=registry,
-            planner=_TwoStepPlanner(stubs.MockLLMClient(), stubs.Config()),
+            planner=_TwoStepPlanner(doubles.MockLLMClient(), doubles.Config()),
         )
 
         result = harness.run("a task")
@@ -1109,7 +1136,7 @@ class TestRunPipeline:
 
     def test_failed_run_reports_failed_without_raising(self, tmp_path: Path) -> None:
         """No deliverable at all is ``failed`` — still a returned result."""
-        registry = stubs.ToolRegistry()  # empty: the planner gets no tools
+        registry = doubles.ToolRegistry()  # empty: the planner gets no tools
         harness = self._harness(tmp_path, registry=registry)
 
         result = harness.run("a task")
@@ -1128,7 +1155,7 @@ class TestRunPipeline:
 
     def test_llm_usage_flows_into_metrics(self, tmp_path: Path) -> None:
         """SPEC-003 § 7 — counters come from the client the harness holds."""
-        client = stubs.MockLLMClient()
+        client = doubles.MockLLMClient()
         harness = self._harness(tmp_path, llm_client=client)
 
         result = harness.run("a task")
@@ -1166,12 +1193,12 @@ class TestRunPipeline:
         """SPEC-005 § 1.2."""
         harness = self._harness(tmp_path)
 
-        class _Seeding(stubs.Orchestrator):
-            def execute(self, plan: stubs.ExecutionPlan) -> stubs.ExecutionPlan:
+        class _Seeding(doubles.Orchestrator):
+            def execute(self, plan: doubles.ExecutionPlan) -> doubles.ExecutionPlan:
                 plan.context["files_created"] = ["out/a.md", "out/b.md", "out/a.md"]
                 return super().execute(plan)
 
-        harness._orchestrator = _Seeding(stubs.ToolRegistry(), harness.config)
+        harness._orchestrator = _Seeding(doubles.ToolRegistry(), harness.config)
         result = harness.run("a task")
 
         assert result.files_created == ["out/a.md", "out/b.md"]
@@ -1180,8 +1207,8 @@ class TestRunPipeline:
         """``HarnessResult.errors`` mirrors ``context['errors']``."""
         harness = self._harness(tmp_path)
 
-        class _Erroring(stubs.Orchestrator):
-            def execute(self, plan: stubs.ExecutionPlan) -> stubs.ExecutionPlan:
+        class _Erroring(doubles.Orchestrator):
+            def execute(self, plan: doubles.ExecutionPlan) -> doubles.ExecutionPlan:
                 plan.context["errors"] = [
                     {
                         "step_id": "step_0",
@@ -1193,7 +1220,7 @@ class TestRunPipeline:
                 ]
                 return super().execute(plan)
 
-        harness._orchestrator = _Erroring(stubs.ToolRegistry(), harness.config)
+        harness._orchestrator = _Erroring(doubles.ToolRegistry(), harness.config)
         result = harness.run("a task")
 
         assert result.errors[0]["error"] == "boom"
@@ -1228,10 +1255,10 @@ class TestRunPipeline:
     def test_a_planner_failure_propagates(self, tmp_path: Path) -> None:
         """SPEC-005 § 1.1 — step 5 is a *raising* step, not a contained one."""
 
-        class _BadPlanner(stubs.Planner):
+        class _BadPlanner(doubles.Planner):
             def __init__(self) -> None:
                 """No collaborators needed."""
-                super().__init__(stubs.MockLLMClient(), stubs.Config())
+                super().__init__(doubles.MockLLMClient(), doubles.Config())
                 self.attempts: list[dict[str, Any]] = []
 
             def plan(
@@ -1240,7 +1267,7 @@ class TestRunPipeline:
                 available_tools: list[dict[str, Any]],
                 *,
                 context: dict[str, Any] | None = None,
-            ) -> stubs.ExecutionPlan:
+            ) -> doubles.ExecutionPlan:
                 """Record the attempt, then raise a planner-class error."""
                 self.attempts.append(
                     {
@@ -1249,7 +1276,7 @@ class TestRunPipeline:
                         "context": context,
                     }
                 )
-                raise stubs.AgentError(
+                raise doubles.AgentError(
                     code="PLAN_VALIDATION_FAILED",
                     message="circular dependency",
                     component="planner",
@@ -1257,7 +1284,7 @@ class TestRunPipeline:
 
         harness = self._harness(tmp_path, planner=_BadPlanner())
 
-        with pytest.raises(stubs.AgentError) as excinfo:
+        with pytest.raises(doubles.AgentError) as excinfo:
             harness.run("a task")
         assert excinfo.value.code == "PLAN_VALIDATION_FAILED"
 
@@ -1266,10 +1293,10 @@ class TestRunPipeline:
         harness = self._harness(tmp_path)
         seen: dict[str, Any] = {}
 
-        class _Watching(stubs.Assembler):
+        class _Watching(doubles.Assembler):
             def assemble(
-                self, plan: stubs.ExecutionPlan, context: dict[str, Any]
-            ) -> stubs.AssemblyResult:
+                self, plan: doubles.ExecutionPlan, context: dict[str, Any]
+            ) -> doubles.AssemblyResult:
                 seen.update(context)
                 return super().assemble(plan, context)
 
@@ -1281,7 +1308,7 @@ class TestRunPipeline:
     def test_invalid_prompt_raises_before_any_step(self, tmp_path: Path) -> None:
         """Step 1 gates everything."""
         harness = self._harness(tmp_path)
-        with pytest.raises(stubs.AgentError) as excinfo:
+        with pytest.raises(doubles.AgentError) as excinfo:
             harness.run("")
         assert excinfo.value.code == "PROMPT_INVALID"
 
@@ -1312,16 +1339,16 @@ class _RecordingProgress:
         self.events.append(event)
 
 
-class _FiringOrchestrator(stubs.Orchestrator):
+class _FiringOrchestrator(doubles.Orchestrator):
     """An orchestrator that fires every hook, to test the bridge in isolation."""
 
     def __init__(self, *, fail_step: bool = False) -> None:
         """Optionally make the single step fail."""
-        super().__init__(stubs.ToolRegistry(), stubs.Config())
+        super().__init__(doubles.ToolRegistry(), doubles.Config())
         self._fail_step = fail_step
         self.fired: list[str] = []
 
-    def execute(self, plan: stubs.ExecutionPlan) -> stubs.ExecutionPlan:
+    def execute(self, plan: doubles.ExecutionPlan) -> doubles.ExecutionPlan:
         """Fire the full hook sequence in the documented order."""
         hooks = self.hooks
         assert hooks is not None, "harness must attach hooks before executing"
@@ -1334,34 +1361,35 @@ class _FiringOrchestrator(stubs.Orchestrator):
         if hooks.on_recovery:
             hooks.on_recovery(step, 1, "retry")
         if self._fail_step:
-            step.status = stubs.StepStatus.FAILED
+            step.status = doubles.StepStatus.FAILED
             step.error = "tool failed"
             if hooks.on_step_failed:
                 hooks.on_step_failed(step, "tool failed")
         else:
-            step.status = stubs.StepStatus.SUCCESS
+            step.status = doubles.StepStatus.SUCCESS
             step.output_data = "done"
             if hooks.on_step_complete:
-                hooks.on_step_complete(step, stubs.ToolResult(success=True))
+                hooks.on_step_complete(step, doubles.ToolResult(success=True))
         plan.status = (
-            stubs.StepStatus.FAILED if self._fail_step else stubs.StepStatus.SUCCESS
+            doubles.StepStatus.FAILED if self._fail_step else doubles.StepStatus.SUCCESS
         )
         if hooks.on_plan_complete:
             hooks.on_plan_complete(plan)
         return plan
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestProgressHooks:
     """SPEC-003 § 2.1 / SPEC-005 § 2.2 — the progress seam."""
 
     def _harness(self, tmp_path: Path, **seams: Any) -> Any:
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(tmp_path / "out")
         config.execution.temp_dir = str(tmp_path / "tmp")
-        return AgentHarness(config, **seams)
+        merged = _plumbing_seams()
+        merged.update(seams)
+        return AgentHarness(config, **merged)
 
     def test_no_progress_callback_is_the_default_and_is_safe(
         self, tmp_path: Path
@@ -1445,7 +1473,7 @@ class TestProgressHooks:
 
     def test_a_raising_callback_is_logged_not_swallowed(self, tmp_path: Path) -> None:
         """The isolation is recorded, so a broken renderer is diagnosable."""
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
 
         def _explode(event: dict[str, Any]) -> None:
             raise RuntimeError(f"progress renderer exploded on {event['event']}")
@@ -1486,32 +1514,33 @@ class TestProgressHooks:
 # ---------------------------------------------------------------------------
 
 
-class _InterruptingOrchestrator(stubs.Orchestrator):
+class _InterruptingOrchestrator(doubles.Orchestrator):
     """An orchestrator that is interrupted mid-step, per SPEC-003 § 2."""
 
-    def __init__(self, registry: stubs.ToolRegistry) -> None:
+    def __init__(self, registry: doubles.ToolRegistry) -> None:
         """Store the registry."""
-        super().__init__(registry, stubs.Config())
+        super().__init__(registry, doubles.Config())
 
-    def execute(self, plan: stubs.ExecutionPlan) -> stubs.ExecutionPlan:
+    def execute(self, plan: doubles.ExecutionPlan) -> doubles.ExecutionPlan:
         """Mark the active step failed, then re-raise, as the spec requires."""
         step = plan.steps[0]
-        step.status = stubs.StepStatus.FAILED
+        step.status = doubles.StepStatus.FAILED
         step.error = "interrupted"
         raise KeyboardInterrupt
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestInstanceReuse:
     """SPEC-005 § 5 — a harness is reusable across runs."""
 
     def _harness(self, tmp_path: Path, **seams: Any) -> Any:
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(tmp_path / "out")
         config.execution.temp_dir = str(tmp_path / "tmp")
-        return AgentHarness(config, **seams)
+        merged = _plumbing_seams()
+        merged.update(seams)
+        return AgentHarness(config, **merged)
 
     def test_registry_and_client_are_reused(self, tmp_path: Path) -> None:
         """The expensive collaborators are built once, not per run."""
@@ -1530,12 +1559,12 @@ class TestInstanceReuse:
         """A file created in run one is absent from run two's result."""
         harness = self._harness(tmp_path)
 
-        class _Seeding(stubs.Orchestrator):
+        class _Seeding(doubles.Orchestrator):
             def __init__(self) -> None:
-                super().__init__(stubs.ToolRegistry(), stubs.Config())
+                super().__init__(doubles.ToolRegistry(), doubles.Config())
                 self.n = 0
 
-            def execute(self, plan: stubs.ExecutionPlan) -> stubs.ExecutionPlan:
+            def execute(self, plan: doubles.ExecutionPlan) -> doubles.ExecutionPlan:
                 self.n += 1
                 if self.n == 1:
                     plan.context["files_created"] = ["run1.md"]
@@ -1549,13 +1578,35 @@ class TestInstanceReuse:
         assert second.files_created == []
 
     def test_usage_counters_accumulate_across_runs(self, tmp_path: Path) -> None:
-        """SPEC-005 § 5 — documented accumulation on a reused instance."""
-        client = stubs.MockLLMClient()
-        harness = self._harness(tmp_path, llm_client=client)
+        """SPEC-005 § 5 — documented accumulation on a reused instance.
+
+        The real planner is used here (``planner=None`` leaves the seam empty), so
+        each run makes exactly one scripted ``complete_json`` round and the client's
+        lifetime counters are measurable.
+        """
+
+        def payload(description: str) -> dict[str, Any]:
+            return {
+                "steps": [
+                    {
+                        "description": description,
+                        "tool_hint": "web_search",
+                        "priority": "high",
+                    }
+                ]
+            }
+
+        # Two scripted replies per run: one planning round, one assembler synthesis
+        # (SPEC-003 § 6 rule 5). Four replies therefore cover two runs.
+        client = doubles.MockLLMClient(
+            [payload("one"), "assembled one", payload("two"), "assembled two"]
+        )
+        harness = self._harness(tmp_path, llm_client=client, planner=None)
 
         first = harness.run("task one")
         second = harness.run("task two")
 
+        assert first.metrics.llm_calls == 2
         assert second.metrics.llm_calls > first.metrics.llm_calls
         assert second.metrics.llm_calls == client.usage.calls
 
@@ -1564,28 +1615,29 @@ class TestInstanceReuse:
         harness = self._harness(tmp_path)
 
         first = harness.run("task one")
-        first.plan.steps[0].status = stubs.StepStatus.SKIPPED
+        first.plan.steps[0].status = doubles.StepStatus.SKIPPED
         second = harness.run("task two")
 
-        assert second.plan.steps[0].status is not stubs.StepStatus.SKIPPED
+        assert second.plan.steps[0].status is not doubles.StepStatus.SKIPPED
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestShutdown:
     """SPEC-002 R8 — tool cleanup on shutdown."""
 
     def _harness(self, tmp_path: Path, **seams: Any) -> Any:
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(tmp_path / "out")
         config.execution.temp_dir = str(tmp_path / "tmp")
-        return AgentHarness(config, **seams)
+        merged = _plumbing_seams()
+        merged.update(seams)
+        return AgentHarness(config, **merged)
 
     def test_close_calls_cleanup_on_every_tool(self, tmp_path: Path) -> None:
         """Every registered tool gets torn down."""
-        a, b = stubs.StubEchoTool("a"), stubs.StubEchoTool("b")
-        registry = stubs.ToolRegistry()
+        a, b = doubles.StubEchoTool("a"), doubles.StubEchoTool("b")
+        registry = doubles.ToolRegistry()
         registry.register(a)
         registry.register(b)
         harness = self._harness(tmp_path, registry=registry)
@@ -1597,8 +1649,8 @@ class TestShutdown:
 
     def test_close_is_idempotent(self, tmp_path: Path) -> None:
         """SPEC-002 R8 — calling it twice must not double up."""
-        tool = stubs.StubEchoTool("a")
-        registry = stubs.ToolRegistry()
+        tool = doubles.StubEchoTool("a")
+        registry = doubles.ToolRegistry()
         registry.register(tool)
         harness = self._harness(tmp_path, registry=registry)
 
@@ -1611,22 +1663,24 @@ class TestShutdown:
         """``with AgentHarness(...) as harness`` cleans up automatically."""
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(tmp_path / "out")
         config.execution.temp_dir = str(tmp_path / "tmp")
-        tool = stubs.StubEchoTool("a")
-        registry = stubs.ToolRegistry()
+        tool = doubles.StubEchoTool("a")
+        registry = doubles.ToolRegistry()
         registry.register(tool)
 
-        with AgentHarness(config, registry=registry) as harness:
+        with AgentHarness(
+            config, **{**_plumbing_seams(), "registry": registry}
+        ) as harness:
             harness.run("a task")
 
         assert tool.cleanup_calls == 1
 
     def test_cleanup_runs_even_when_the_run_fails(self, tmp_path: Path) -> None:
         """A contained failure must not skip teardown."""
-        tool = stubs.StubEchoTool("a")
-        registry = stubs.ToolRegistry()
+        tool = doubles.StubEchoTool("a")
+        registry = doubles.ToolRegistry()
         registry.register(tool)
         harness = self._harness(
             tmp_path, registry=registry, orchestrator=_ExplodingOrchestrator()
@@ -1644,15 +1698,15 @@ class TestShutdown:
     ) -> None:
         """One bad teardown cannot prevent the rest, and is not silenced."""
 
-        class _BadCleanup(stubs.StubEchoTool):
+        class _BadCleanup(doubles.StubEchoTool):
             def cleanup(self) -> None:
                 raise RuntimeError("cleanup exploded")
 
-        bad, good = _BadCleanup("bad"), stubs.StubEchoTool("good")
-        registry = stubs.ToolRegistry()
+        bad, good = _BadCleanup("bad"), doubles.StubEchoTool("good")
+        registry = doubles.ToolRegistry()
         registry.register(bad)
         registry.register(good)
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
         harness = self._harness(tmp_path, registry=registry, logger=logger)
 
         harness.close()
@@ -1661,22 +1715,23 @@ class TestShutdown:
         assert any(r["event"] == "tool_cleanup_failed" for r in logger.records)
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestInterrupt:
     """SPEC-003 § 2 / SPEC-005 § 2.1 — SIGINT handling."""
 
     def _harness(self, tmp_path: Path, **seams: Any) -> Any:
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(tmp_path / "out")
         config.execution.temp_dir = str(tmp_path / "tmp")
-        return AgentHarness(config, **seams)
+        merged = _plumbing_seams()
+        merged.update(seams)
+        return AgentHarness(config, **merged)
 
     def test_interrupt_propagates_so_the_cli_can_exit_130(self, tmp_path: Path) -> None:
         """The interrupt is never swallowed (agent.md F7)."""
         harness = self._harness(
-            tmp_path, orchestrator=_InterruptingOrchestrator(stubs.ToolRegistry())
+            tmp_path, orchestrator=_InterruptingOrchestrator(doubles.ToolRegistry())
         )
 
         with pytest.raises(KeyboardInterrupt):
@@ -1685,7 +1740,7 @@ class TestInterrupt:
     def test_interrupt_still_produces_a_failed_result(self, tmp_path: Path) -> None:
         """The interrupted run is inspectable after the fact."""
         harness = self._harness(
-            tmp_path, orchestrator=_InterruptingOrchestrator(stubs.ToolRegistry())
+            tmp_path, orchestrator=_InterruptingOrchestrator(doubles.ToolRegistry())
         )
 
         with pytest.raises(KeyboardInterrupt):
@@ -1695,14 +1750,14 @@ class TestInterrupt:
         assert result is not None
         assert result.status == "failed"
         assert any(e.get("error") == "interrupted" for e in result.errors)
-        assert result.plan.status is stubs.StepStatus.FAILED
+        assert result.plan.status is doubles.StepStatus.FAILED
 
     def test_interrupt_is_logged(self, tmp_path: Path) -> None:
         """An interrupted run leaves a trace in the log."""
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
         harness = self._harness(
             tmp_path,
-            orchestrator=_InterruptingOrchestrator(stubs.ToolRegistry()),
+            orchestrator=_InterruptingOrchestrator(doubles.ToolRegistry()),
             logger=logger,
         )
 
@@ -1720,12 +1775,11 @@ class TestInterrupt:
 FAKE_SECRET = "sk-" + "0" * 48
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestStartupWarnings:
     """SPEC-005 § 4 — one-time startup warnings, values never disclosed."""
 
     def _config(self, tmp_path: Path) -> Any:
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.output_dir = str(tmp_path / "out")
         config.execution.temp_dir = str(tmp_path / "tmp")
         return config
@@ -1739,7 +1793,7 @@ class TestStartupWarnings:
         """Enabling shell execution is announced once, at startup."""
         config = self._config(tmp_path)
         config.security.allow_shell = True
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
 
         from agent_harness import AgentHarness
 
@@ -1751,7 +1805,7 @@ class TestStartupWarnings:
 
     def test_no_shell_warning_when_shell_is_disabled(self, tmp_path: Path) -> None:
         """The default (opt-in off) stays quiet."""
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
         self._harness(tmp_path, logger=logger)
         shell = [r for r in logger.records if r["event"] == "shell_execution_enabled"]
         assert not shell
@@ -1761,7 +1815,7 @@ class TestStartupWarnings:
     ) -> None:
         """Degraded PDF export is informational, not an error."""
         monkeypatch.setattr(shutil, "which", lambda _name: None)
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
         self._harness(tmp_path, logger=logger)
 
         pdf = [r for r in logger.records if r["event"] == "pdf_export_degraded"]
@@ -1774,7 +1828,7 @@ class TestStartupWarnings:
     ) -> None:
         """No note when the binary is available."""
         monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/wkhtmltopdf")
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
         self._harness(tmp_path, logger=logger)
 
         assert not [r for r in logger.records if r["event"] == "pdf_export_degraded"]
@@ -1788,7 +1842,7 @@ class TestStartupWarnings:
             f"OPENAI_API_KEY={FAKE_SECRET}\nSEARCH_API_KEY=fake-search-key\n",
             encoding="utf-8",
         )
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
         self._harness(tmp_path, logger=logger)
 
         transmitted = [
@@ -1808,7 +1862,7 @@ class TestStartupWarnings:
         (tmp_path / ".env").write_text(
             f"OPENAI_API_KEY={FAKE_SECRET}\n", encoding="utf-8"
         )
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
         self._harness(tmp_path, logger=logger)
 
         rendered = [str(record) for record in logger.records]
@@ -1822,11 +1876,11 @@ class TestStartupWarnings:
         (tmp_path / ".env").write_text(
             f"OPENAI_API_KEY={FAKE_SECRET}\n", encoding="utf-8"
         )
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
         self._harness(tmp_path, logger=logger)
 
         for record in logger.records:
-            _, count = stubs.sensitive_data_filter(str(record))
+            _, count = doubles.sensitive_data_filter(str(record))
             assert count == 0, record
 
     def test_no_dotenv_file_is_not_an_error(
@@ -1835,7 +1889,7 @@ class TestStartupWarnings:
         """A missing ``.env`` produces no crash and no transmitted warning."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
         self._harness(tmp_path, logger=logger)
 
         assert not [
@@ -1851,7 +1905,7 @@ class TestStartupWarnings:
             "# comment\n\n=novalue\nNOT_AN_ASSIGNMENT\nOPENAI_API_KEY=x\n",
             encoding="utf-8",
         )
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
         self._harness(tmp_path, logger=logger)
 
         names = [
@@ -1866,7 +1920,7 @@ class TestStartupWarnings:
     ) -> None:
         """SPEC-005 § 4 — the user is told how to fix it."""
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
         self._harness(tmp_path, logger=logger)
 
         missing = [r for r in logger.records if r["event"] == "api_key_missing"]
@@ -1878,7 +1932,7 @@ class TestStartupWarnings:
         """Re-running the emitter must not duplicate any warning."""
         config = self._config(tmp_path)
         config.security.allow_shell = True
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
 
         from agent_harness import AgentHarness
 
@@ -1895,7 +1949,7 @@ class TestStartupWarnings:
 # ---------------------------------------------------------------------------
 
 
-class _FallbackPlanner(stubs.Planner):
+class _FallbackPlanner(doubles.Planner):
     """Plans two steps that each carry fallback tools."""
 
     def plan(
@@ -1904,22 +1958,22 @@ class _FallbackPlanner(stubs.Planner):
         available_tools: list[dict[str, Any]],
         *,
         context: dict[str, Any] | None = None,
-    ) -> stubs.ExecutionPlan:
+    ) -> doubles.ExecutionPlan:
         """Return a plan whose steps ask for fallback tools."""
-        return stubs.ExecutionPlan(
+        return doubles.ExecutionPlan(
             original_prompt=prompt,
             context={
                 "available_tools": available_tools,
                 "planner_context": context,
             },
             steps=[
-                stubs.Step(
+                doubles.Step(
                     id="s1",
                     description="first",
                     tool_name="echo",
                     fallback_tools=["echo_backup", "shell_command"],
                 ),
-                stubs.Step(
+                doubles.Step(
                     id="s2",
                     description="second",
                     tool_name="echo",
@@ -1930,24 +1984,23 @@ class _FallbackPlanner(stubs.Planner):
         )
 
 
-class _CapturingOrchestrator(stubs.Orchestrator):
+class _CapturingOrchestrator(doubles.Orchestrator):
     """Records the exact plan object it was handed."""
 
     def __init__(self) -> None:
         """Start with an empty registry and no recorded plan."""
-        super().__init__(stubs.ToolRegistry(), stubs.Config())
-        self.seen: stubs.ExecutionPlan | None = None
+        super().__init__(doubles.ToolRegistry(), doubles.Config())
+        self.seen: doubles.ExecutionPlan | None = None
 
-    def execute(self, plan: stubs.ExecutionPlan) -> stubs.ExecutionPlan:
+    def execute(self, plan: doubles.ExecutionPlan) -> doubles.ExecutionPlan:
         """Record the plan, mark every step successful, and return it."""
         self.seen = plan
         for step in plan.steps:
-            step.status = stubs.StepStatus.SUCCESS
-        plan.status = stubs.StepStatus.SUCCESS
+            step.status = doubles.StepStatus.SUCCESS
+        plan.status = doubles.StepStatus.SUCCESS
         return plan
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestNoFallbackPolicy:
     """SPEC-005 § 2 — ``--no-fallback`` limits recovery to Level 1."""
 
@@ -1955,12 +2008,12 @@ class TestNoFallbackPolicy:
         """With replan enabled the orchestrator gets the planner's fallbacks."""
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         orchestrator = _CapturingOrchestrator()
         harness = AgentHarness(
             config,
-            llm_client=stubs.MockLLMClient(),
-            planner=_FallbackPlanner(stubs.MockLLMClient(), config),
+            llm_client=doubles.MockLLMClient(),
+            planner=_FallbackPlanner(doubles.MockLLMClient(), config),
             orchestrator=orchestrator,
         )
 
@@ -1979,13 +2032,13 @@ class TestNoFallbackPolicy:
         """The flag the CLI sets: no Level 2 and no Level 3 recovery."""
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.enable_replan = False
         orchestrator = _CapturingOrchestrator()
         harness = AgentHarness(
             config,
-            llm_client=stubs.MockLLMClient(),
-            planner=_FallbackPlanner(stubs.MockLLMClient(), config),
+            llm_client=doubles.MockLLMClient(),
+            planner=_FallbackPlanner(doubles.MockLLMClient(), config),
             orchestrator=orchestrator,
         )
 
@@ -1999,13 +2052,13 @@ class TestNoFallbackPolicy:
         """Only the fallback list changes."""
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         config.execution.enable_replan = False
         orchestrator = _CapturingOrchestrator()
         harness = AgentHarness(
             config,
-            llm_client=stubs.MockLLMClient(),
-            planner=_FallbackPlanner(stubs.MockLLMClient(), config),
+            llm_client=doubles.MockLLMClient(),
+            planner=_FallbackPlanner(doubles.MockLLMClient(), config),
             orchestrator=orchestrator,
         )
 
@@ -2022,12 +2075,12 @@ class TestNoFallbackPolicy:
         """Flipping the flag between runs changes what the next run gets."""
         from agent_harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         orchestrator = _CapturingOrchestrator()
         harness = AgentHarness(
             config,
-            llm_client=stubs.MockLLMClient(),
-            planner=_FallbackPlanner(stubs.MockLLMClient(), config),
+            llm_client=doubles.MockLLMClient(),
+            planner=_FallbackPlanner(doubles.MockLLMClient(), config),
             orchestrator=orchestrator,
         )
 
@@ -2049,6 +2102,11 @@ class TestNoFallbackPolicy:
 #: Every cross-plan module the composition root resolves by dotted name. These
 #: are the swap targets: at I1 the stub behind each name is replaced by the real
 #: Plan 1-3 module, and nothing in this plan changes.
+#:
+#: The swap grew the table by one: SCR-P3-6's ``ModelProvider`` seam makes the
+#: planner's ``Step``/``ExecutionPlan``/``TaskPriority`` and its ``ToolResult``
+#: Plan 1/2's real classes, and SPEC-003 § 5's recovery cascade has to be composed
+#: from ``agent_harness.orchestration`` — recorded as SCR-P4-12.
 RESOLVED_MODULES = frozenset(
     {
         "agent_harness.config",
@@ -2060,6 +2118,7 @@ RESOLVED_MODULES = frozenset(
         "agent_harness.orchestration",
         "agent_harness.planning",
         "agent_harness.tools",
+        "agent_harness.tools.base",
     }
 )
 
@@ -2073,11 +2132,16 @@ RESOLVED_SYMBOLS = frozenset(
         "ContextStore",
         "ExecutionHooks",
         "ExecutionMetrics",
+        "ExecutionPlan",
         "Orchestrator",
         "Planner",
+        "RecoveryManager",
+        "Step",
         "StepStatus",
         "StructuredLogger",
+        "TaskPriority",
         "ToolRegistry",
+        "ToolResult",
         "create_llm_client",
         "default_tools",
         "render_report",
@@ -2144,9 +2208,24 @@ class TestSwapChecklist:
         """The swap must not need edits: no ``_p4_stubs`` reference ships."""
         assert "_p4_stubs" not in _harness_source()
 
-    def test_the_stubs_stay_available_for_tests(self) -> None:
-        """I1 swaps the composition root, not the test doubles."""
-        assert stubs.STUB_MODULE_CONTENTS.keys() >= RESOLVED_MODULES
+    def test_every_resolved_module_is_a_shipped_package_module(self) -> None:
+        """I1 swapped what the names resolve to; the names must resolve for real."""
+        import importlib
+        import pathlib
+
+        package_root = (
+            pathlib.Path(importlib.import_module("agent_harness").__file__ or "")
+            .resolve()
+            .parent
+        )
+
+        for dotted in sorted(RESOLVED_MODULES):
+            module = importlib.import_module(dotted)
+            source = getattr(module, "__file__", None)
+
+            assert module.__name__ == dotted
+            assert source is not None, f"{dotted} is not a real module"
+            assert package_root in pathlib.Path(source).resolve().parents
 
 
 # ---------------------------------------------------------------------------
@@ -2431,7 +2510,6 @@ class TestConfigSurface:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestTroubleshootingMessages:
     """Each Developer README troubleshooting entry has a concrete P4 signal.
 
@@ -2447,9 +2525,9 @@ class TestTroubleshootingMessages:
         from agent_harness.harness import AgentHarness
 
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
 
-        AgentHarness(stubs.Config(), logger=logger)
+        AgentHarness(doubles.Config(), logger=logger)
 
         records = [r for r in logger.records if r["event"] == "api_key_missing"]
 
@@ -2467,9 +2545,9 @@ class TestTroubleshootingMessages:
         from agent_harness.harness import AgentHarness
 
         monkeypatch.setattr(shutil, "which", lambda _name: None)
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
 
-        harness = AgentHarness(stubs.Config(), logger=logger)
+        harness = AgentHarness(doubles.Config(), logger=logger)
 
         records = [r for r in logger.records if r["event"] == "pdf_export_degraded"]
 
@@ -2482,9 +2560,9 @@ class TestTroubleshootingMessages:
         """Not in the README, but the same class of surprise: an opt-in risk."""
         from agent_harness.harness import AgentHarness
 
-        config = stubs.Config()
+        config = doubles.Config()
         config.security.allow_shell = True
-        logger = stubs.StructuredLogger()
+        logger = doubles.RecordingLogger()
 
         AgentHarness(config, logger=logger)
 
