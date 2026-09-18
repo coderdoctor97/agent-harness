@@ -48,6 +48,16 @@ report ``done``). SCR-P3-12 records this sequencing constraint.
 
 from __future__ import annotations
 
+from agent_harness.orchestration.assembler import Assembler, AssemblyResult
 from agent_harness.orchestration.dependency import resolve_execution_order
+from agent_harness.orchestration.orchestrator import ExecutionHooks, Orchestrator
+from agent_harness.orchestration.recovery import RecoveryManager
 
-__all__ = ["resolve_execution_order"]
+__all__ = [
+    "Assembler",
+    "AssemblyResult",
+    "ExecutionHooks",
+    "Orchestrator",
+    "RecoveryManager",
+    "resolve_execution_order",
+]

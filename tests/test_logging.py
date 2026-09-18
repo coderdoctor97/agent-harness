@@ -54,8 +54,9 @@ def test_jsonl_schema_children_and_levels(tmp_path: Path) -> None:
     assert len(console.getvalue().splitlines()) == 4
     with pytest.raises(ValueError):
         logger.info("step_started")
-    with pytest.raises(ValueError):
-        logger.info("harness", "unknown")
+    # Unknown events are now allowed through (open catalog — SCR-P3-10, SCR-P4-10).
+    # The event name is preserved verbatim so consumers can still filter on it.
+    logger.info("harness", "unknown")  # should NOT raise
     assert StructuredLogger.default() is not StructuredLogger.default()
     StructuredLogger.default().info("harness", "harness_start")
 
