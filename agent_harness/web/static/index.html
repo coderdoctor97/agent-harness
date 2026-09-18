@@ -3,158 +3,536 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent Harness — local UI</title>
-<meta name="description" content="Submit a task to the local agent harness and watch it plan, execute and recover.">
+<title>Agent Harness — AI Development Environment</title>
+<meta name="description" content="Local-first autonomous AI coding environment with human-in-the-loop controls, live workspace, and real-time diffs.">
 <link rel="stylesheet" href="/static/tokens.css">
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 <a class="visually-hidden" href="#task-prompt">Skip to the task form</a>
 
-<div class="shell">
-  <div class="brand">
-    <span class="brand__mark" aria-hidden="true">AH</span>
-    <span class="brand__text">
-      <span class="brand__name">Agent Harness</span>
-      <span class="brand__sub">local-first agent runtime</span>
-    </span>
-  </div>
-
-  <header class="header">
-    <div class="header__facts" id="health" role="status" aria-live="polite">
-      <div class="fact">
-        <span class="fact__label">Provider</span>
-        <span class="fact__value" id="health-provider">…</span>
+<div class="shell" id="app-shell">
+  <!-- TOP BAR -->
+  <header class="topbar">
+    <div class="topbar__left">
+      <div class="brand">
+        <span class="brand__mark" aria-hidden="true">AH</span>
+        <span class="brand__name">Agent Harness</span>
       </div>
-      <div class="fact">
-        <span class="fact__label">Model</span>
-        <span class="fact__value" id="health-model">…</span>
+      <div class="topbar__divider" aria-hidden="true"></div>
+      <div class="topbar__workspace" id="workspace-badge" title="Local Workspace">
+        <span class="icon" aria-hidden="true">📁</span>
+        <span id="topbar-workspace-name">agent-harness</span>
       </div>
-      <div class="fact">
-        <span class="fact__label">Output</span>
-        <span class="fact__value" id="health-output">…</span>
+      <div class="badge badge--connection" id="connection-badge">
+        <span class="badge__dot" aria-hidden="true"></span>
+        <span id="connection-label">● Local Sandbox</span>
       </div>
-      <div class="fact">
-        <span class="fact__label">Credential</span>
-        <span class="fact__value" id="health-key">…</span>
+      <div class="topbar__branch" id="branch-selector" title="Active Branch">
+        <span class="icon" aria-hidden="true">⎇</span>
+        <span id="topbar-branch">main</span>
       </div>
     </div>
-    <button class="button button--quiet" type="button" id="refresh">Refresh</button>
+
+    <div class="topbar__right">
+      <div class="badge badge--status badge--idle" id="agent-status-badge">
+        <span class="badge__dot" aria-hidden="true"></span>
+        <span id="agent-status-text">Idle</span>
+      </div>
+      <div class="live" id="live-indicator" aria-hidden="true" hidden>
+        <span class="live__dot" aria-hidden="true"></span>LIVE
+      </div>
+      <button class="button button--icon" type="button" id="sidebar-toggle" title="Toggle Sidebar (Ctrl+B)">
+        <span aria-hidden="true">◫</span>
+      </button>
+      <button class="button button--icon" type="button" id="settings-btn" title="Environment &amp; Settings">
+        <span aria-hidden="true">⚙</span>
+      </button>
+    </div>
   </header>
 
-  <nav class="rail" aria-label="Task history">
-    <h2 class="rail__heading">Recent tasks</h2>
-    <ul class="history" id="history">
-      <li class="history__empty">No tasks yet — submit one to get started.</li>
-    </ul>
-
-    <h2 class="rail__heading">Tools</h2>
-    <ul class="history" id="tools">
-      <li class="history__empty">Loading registry…</li>
-    </ul>
-  </nav>
-
-  <main class="main">
-    <section class="compose" aria-labelledby="compose-title">
-      <h1 class="compose__title" id="compose-title">What should the agent do?</h1>
-      <p class="compose__hint">
-        The task is decomposed into a plan, executed step by step with automatic retry,
-        fallback and re-planning, and assembled into a deliverable under your output directory.
-      </p>
-
-      <form id="task-form" novalidate>
-        <div class="compose__field">
-          <label class="compose__label" for="task-prompt">Task</label>
-          <textarea
-            class="compose__input"
-            id="task-prompt"
-            name="prompt"
-            rows="4"
-            maxlength="20000"
-            required
-            aria-describedby="prompt-help prompt-error"
-            placeholder="Research the top 3 Python web frameworks and write a comparison table with sources."></textarea>
-          <p class="compose__hint" id="prompt-help">
-            Up to 20,000 characters. Ctrl+Enter submits; the agent runs locally and only calls the LLM provider.
-          </p>
-          <p class="field-error" id="prompt-error" role="alert"></p>
+  <!-- BODY: SPLIT VIEW (LEFT CONTROL PANEL + MAIN WORKSPACE) -->
+  <div class="body-layout">
+    <!-- LEFT CONTROL PANEL (COLLAPSIBLE) -->
+    <aside class="sidebar" id="sidebar" aria-label="Agent Control Center">
+      <!-- SECTION A: AGENT SESSION -->
+      <section class="sidebar-card" id="session-card">
+        <div class="sidebar-card__head">
+          <h2 class="sidebar-card__title">AGENT SESSION</h2>
+          <span class="badge badge--sm" id="session-status-badge">IDLE</span>
         </div>
-
-        <div class="compose__actions">
-          <button class="button button--primary" type="submit" id="submit">Run task</button>
-          <div class="presets" role="group" aria-label="Example tasks">
-            <span class="presets__label">Try</span>
-            <button class="button" type="button" data-preset="Research the top 3 Python web frameworks and write a comparison table with sources.">Research + table</button>
-            <button class="button" type="button" data-preset="Write a Python function that parses a CSV of sales records and prints the top 5 products by revenue, then run it on a small sample.">Generate + run code</button>
-            <button class="button" type="button" data-preset="Summarise the riskiest parts of a file-processing pipeline and propose mitigations as a short report.">Analysis report</button>
+        <div class="session-info">
+          <div class="session-prompt" id="session-task-text" title="Current Task">
+            No task running. Submit a prompt below to start.
+          </div>
+          <div class="session-meta-grid">
+            <div class="session-meta-item">
+              <span class="session-meta-label">Current phase</span>
+              <span class="session-meta-val" id="session-phase">Idle</span>
+            </div>
+            <div class="session-meta-item">
+              <span class="session-meta-label">Elapsed</span>
+              <span class="session-meta-val" id="session-elapsed">00:00</span>
+            </div>
+          </div>
+          <div class="session-activity">
+            <span class="session-meta-label">Recent Activity</span>
+            <ul class="activity-list" id="activity-list">
+              <li class="activity-item activity-item--idle">
+                <span class="activity-icon" aria-hidden="true">○</span>
+                <span>Awaiting instruction</span>
+              </li>
+            </ul>
+          </div>
+          <div class="session-tools" id="active-tools-container" hidden>
+            <span class="session-meta-label">Active Tool</span>
+            <div class="tool-tag" id="active-tool-tag">-</div>
           </div>
         </div>
-      </form>
-    </section>
+      </section>
 
-    <div class="notice notice--error" id="error" role="alert" hidden>
-      <span class="notice__code" id="error-code"></span>
-      <span id="error-message"></span>
+      <!-- SECTION B: ROADMAP -->
+      <section class="sidebar-card" id="roadmap-card">
+        <div class="sidebar-card__head">
+          <h2 class="sidebar-card__title">ROADMAP</h2>
+          <button class="button button--micro" type="button" id="roadmap-info-btn">Details</button>
+        </div>
+        <ol class="roadmap-list" id="roadmap-list">
+          <li class="roadmap-item" data-milestone="analyze_repo">
+            <span class="roadmap-icon" aria-hidden="true">○</span>
+            <span class="roadmap-label">Analyze repository</span>
+          </li>
+          <li class="roadmap-item" data-milestone="architecture">
+            <span class="roadmap-icon" aria-hidden="true">○</span>
+            <span class="roadmap-label">Understand architecture</span>
+          </li>
+          <li class="roadmap-item" data-milestone="plan">
+            <span class="roadmap-icon" aria-hidden="true">○</span>
+            <span class="roadmap-label">Create implementation plan</span>
+          </li>
+          <li class="roadmap-item" data-milestone="implement">
+            <span class="roadmap-icon" aria-hidden="true">○</span>
+            <span class="roadmap-label">Implement changes</span>
+          </li>
+          <li class="roadmap-item" data-milestone="test">
+            <span class="roadmap-icon" aria-hidden="true">○</span>
+            <span class="roadmap-label">Run tests</span>
+          </li>
+          <li class="roadmap-item" data-milestone="review">
+            <span class="roadmap-icon" aria-hidden="true">○</span>
+            <span class="roadmap-label">Review changes</span>
+          </li>
+          <li class="roadmap-item" data-milestone="approval">
+            <span class="roadmap-icon" aria-hidden="true">○</span>
+            <span class="roadmap-label">Human approval</span>
+          </li>
+          <li class="roadmap-item" data-milestone="pr">
+            <span class="roadmap-icon" aria-hidden="true">○</span>
+            <span class="roadmap-label">Create PR</span>
+          </li>
+        </ol>
+      </section>
+
+      <!-- SECTION C: HUMAN CHECKPOINT (DYNAMIC CARD) -->
+      <section class="checkpoint-card" id="checkpoint-card" hidden>
+        <div class="checkpoint-card__header">
+          <span class="checkpoint-badge">CHECKPOINT</span>
+          <span class="checkpoint-phase" id="checkpoint-phase-name">Implementation Complete</span>
+        </div>
+        <p class="checkpoint-message" id="checkpoint-message">
+          The agent completed this phase. Review the changes before proceeding.
+        </p>
+        <div class="checkpoint-stats">
+          <div class="checkpoint-stat">
+            <span class="checkpoint-stat__num" id="checkpoint-files-count">0</span>
+            <span class="checkpoint-stat__lbl">files changed</span>
+          </div>
+          <div class="checkpoint-stat">
+            <span class="checkpoint-stat__num" id="checkpoint-tests-count">0</span>
+            <span class="checkpoint-stat__lbl">checks passed</span>
+          </div>
+        </div>
+        <div class="checkpoint-actions">
+          <button class="button button--secondary button--full" type="button" id="checkpoint-review-btn">
+            Review Changes
+          </button>
+          <div class="button-row">
+            <button class="button button--success button--flex" type="button" id="checkpoint-approve-btn">
+              Approve &amp; Continue
+            </button>
+            <button class="button button--danger button--flex" type="button" id="checkpoint-reject-btn">
+              Reject
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION D: MCP & GITHUB AUTOMATION -->
+      <section class="sidebar-card" id="git-pr-card">
+        <div class="sidebar-card__head">
+          <h2 class="sidebar-card__title">MCP / GITHUB</h2>
+          <span class="badge badge--sm" id="git-status-badge">LOCAL</span>
+        </div>
+        <div class="git-info">
+          <div class="git-info-row">
+            <span class="git-lbl">Repository:</span>
+            <span class="git-val" id="git-repo-val">-</span>
+          </div>
+          <div class="git-info-row">
+            <span class="git-lbl">Branch:</span>
+            <span class="git-val" id="git-branch-val">main</span>
+          </div>
+          <div class="git-info-row">
+            <span class="git-lbl">Diff:</span>
+            <span class="git-val" id="git-diff-summary">0 files changed</span>
+          </div>
+        </div>
+        <div class="pr-box" id="pr-automation-box">
+          <button class="button button--primary button--full" type="button" id="open-pr-panel-btn">
+            Pull Request Automation
+          </button>
+        </div>
+      </section>
+
+      <!-- RECENT TASKS -->
+      <section class="sidebar-card" id="recent-tasks-card">
+        <div class="sidebar-card__head">
+          <h2 class="sidebar-card__title">RECENT TASKS</h2>
+          <button class="button button--micro" type="button" id="refresh-history">Reload</button>
+        </div>
+        <ul class="history-list" id="history">
+          <li class="history__empty">No previous tasks.</li>
+        </ul>
+      </section>
+    </aside>
+
+    <!-- MAIN WORKSPACE -->
+    <main class="workspace" id="main-workspace">
+      <!-- WORKSPACE TABS -->
+      <div class="tabs-bar">
+        <div class="tabs" role="tablist" aria-label="Workspace Views">
+          <button class="tab" type="button" role="tab" id="tab-files" aria-controls="panel-files" aria-selected="false">
+            Files
+          </button>
+          <button class="tab" type="button" role="tab" id="tab-code" aria-controls="panel-code" aria-selected="false">
+            Code
+          </button>
+          <button class="tab" type="button" role="tab" id="tab-diff" aria-controls="panel-diff" aria-selected="true">
+            Diff <span class="tab-badge" id="diff-tab-badge">0</span>
+          </button>
+          <button class="tab" type="button" role="tab" id="tab-preview" aria-controls="panel-preview" aria-selected="false">
+            Preview
+          </button>
+          <button class="tab" type="button" role="tab" id="tab-terminal" aria-controls="panel-terminal" aria-selected="false">
+            Terminal
+          </button>
+          <button class="tab" type="button" role="tab" id="tab-steps" aria-controls="panel-steps" aria-selected="false">
+            Steps
+          </button>
+          <button class="tab" type="button" role="tab" id="tab-log" aria-controls="panel-log" aria-selected="false">
+            Log
+          </button>
+        </div>
+        <div class="tab-actions">
+          <button class="button button--micro" type="button" id="refresh-tab-btn" title="Refresh Current Tab">
+            ↻ Refresh
+          </button>
+        </div>
+      </div>
+
+      <!-- TAB PANELS -->
+      <div class="workspace-content">
+        <!-- 1. FILES TAB -->
+        <div class="tabpanel" id="panel-files" role="tabpanel" aria-labelledby="tab-files" hidden>
+          <div class="file-browser-layout">
+            <div class="file-tree-container">
+              <div class="file-tree-header">
+                <span class="file-tree-title">Workspace Root</span>
+                <span class="file-tree-filter-box">
+                  <label class="visually-hidden" for="file-filter-input">Filter files</label>
+                  <input type="text" id="file-filter-input" placeholder="Filter files..." class="filter-input">
+                </span>
+              </div>
+              <div class="file-tree" id="file-tree-view">
+                <div class="loading-placeholder">Loading file tree…</div>
+              </div>
+            </div>
+            <div class="file-preview-mini">
+              <div class="file-preview-header">
+                <span class="file-preview-filename" id="file-preview-name">Select a file to view</span>
+                <button class="button button--sm" type="button" id="open-in-editor-btn" disabled>
+                  Open in Editor
+                </button>
+              </div>
+              <pre class="file-preview-code" id="file-preview-text">Choose a file from the explorer on the left.</pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. CODE VIEWER / EDITOR TAB -->
+        <div class="tabpanel" id="panel-code" role="tabpanel" aria-labelledby="tab-code" hidden>
+          <div class="editor-layout">
+            <div class="editor-header">
+              <div class="editor-file-info">
+                <span class="icon" aria-hidden="true">📄</span>
+                <span class="editor-filename" id="editor-active-filename">No file open</span>
+                <span class="badge badge--sm" id="editor-modified-badge" hidden>Modified</span>
+              </div>
+              <div class="editor-actions">
+                <button class="button button--sm" type="button" id="editor-revert-btn" disabled>Revert</button>
+                <button class="button button--primary button--sm" type="button" id="editor-save-btn" disabled>Save File</button>
+              </div>
+            </div>
+            <div class="code-editor-container">
+              <div class="line-numbers" id="editor-line-numbers" aria-hidden="true">1</div>
+              <label class="visually-hidden" for="code-editor-textarea">Code editor</label>
+              <textarea class="code-editor" id="code-editor-textarea" spellcheck="false" placeholder="// Select a file from the Files tab to edit"></textarea>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. DIFF VIEWER TAB -->
+        <div class="tabpanel" id="panel-diff" role="tabpanel" aria-labelledby="tab-diff">
+          <div class="diff-layout">
+            <div class="diff-header">
+              <div class="diff-summary-bar">
+                <span class="diff-summary-title">CHANGES</span>
+                <span class="diff-summary-pill" id="diff-summary-text">0 files changed</span>
+              </div>
+              <div class="diff-actions">
+                <button class="button button--sm" type="button" id="diff-refresh-btn">Refresh Diff</button>
+              </div>
+            </div>
+            <div class="diff-content" id="diff-container">
+              <div class="diff-empty">No modified files detected in workspace.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4. PREVIEW / DELIVERABLE TAB -->
+        <div class="tabpanel" id="panel-preview" role="tabpanel" aria-labelledby="tab-preview" hidden>
+          <div class="preview-layout">
+            <div class="subtabs" role="tablist" aria-label="Deliverable Views">
+              <button class="subtab subtab--active" type="button" role="tab" id="subtab-output" aria-controls="subpanel-output" aria-selected="true">
+                Deliverable
+              </button>
+              <button class="subtab" type="button" role="tab" id="subtab-report" aria-controls="subpanel-report" aria-selected="false">
+                Execution Report
+              </button>
+              <button class="subtab" type="button" role="tab" id="subtab-artifacts" aria-controls="subpanel-artifacts" aria-selected="false">
+                Output Files
+              </button>
+              <button class="subtab" type="button" role="tab" id="subtab-metrics" aria-controls="subpanel-metrics" aria-selected="false">
+                Metrics
+              </button>
+            </div>
+            <div class="subpanel" id="subpanel-output" role="tabpanel" aria-labelledby="subtab-output">
+              <div class="output" id="output">
+                <p class="output__placeholder">No deliverable produced yet.</p>
+              </div>
+            </div>
+            <div class="subpanel" id="subpanel-report" role="tabpanel" aria-labelledby="subtab-report" hidden>
+              <div class="output" id="report">
+                <pre class="output__prose">No execution report generated.</pre>
+              </div>
+            </div>
+            <div class="subpanel" id="subpanel-artifacts" role="tabpanel" aria-labelledby="subtab-artifacts" hidden>
+              <ul class="artifacts" id="artifacts">
+                <li class="artifacts__empty">No artifact files yet.</li>
+              </ul>
+            </div>
+            <div class="subpanel" id="subpanel-metrics" role="tabpanel" aria-labelledby="subtab-metrics" hidden>
+              <div class="output" id="metrics">
+                <div class="facts-grid" id="metrics-grid"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5. TERMINAL / RUNTIME OUTPUT TAB -->
+        <div class="tabpanel" id="panel-terminal" role="tabpanel" aria-labelledby="tab-terminal" hidden>
+          <div class="terminal-layout">
+            <div class="terminal-toolbar">
+              <span class="terminal-title">Runtime Terminal Output</span>
+              <div class="terminal-quick-buttons">
+                <button class="button button--sm" type="button" id="term-run-pytest">Run pytest</button>
+                <button class="button button--sm" type="button" id="term-run-ruff">Run ruff check</button>
+                <button class="button button--sm" type="button" id="term-run-git-status">git status</button>
+                <button class="button button--sm" type="button" id="term-clear">Clear</button>
+              </div>
+            </div>
+            <div class="terminal-screen" id="terminal-screen">
+              <div class="terminal-line terminal-line--info">Agent Harness Controlled Runtime Console. Ready.</div>
+            </div>
+            <form class="terminal-input-bar" id="terminal-form">
+              <label class="terminal-prompt-symbol" for="terminal-custom-command">&gt;</label>
+              <input type="text" class="terminal-input" id="terminal-custom-command" placeholder="Enter test or developer command (e.g. pytest tests/test_web)...">
+              <button class="button button--primary button--sm" type="submit" id="terminal-submit-btn">Run</button>
+            </form>
+          </div>
+        </div>
+
+        <!-- 6. STEPS TAB -->
+        <div class="tabpanel" id="panel-steps" role="tabpanel" aria-labelledby="tab-steps" hidden>
+          <div class="steps-layout">
+            <div class="panel__head">
+              <h3 class="panel__title">Plan Steps &amp; Status</h3>
+              <span class="badge badge--idle" id="steps-plan-status">Idle</span>
+            </div>
+            <ol class="steps" id="steps">
+              <li class="artifacts__empty">Waiting for task submission…</li>
+            </ol>
+          </div>
+        </div>
+
+        <!-- 7. EXECUTION LOG TAB -->
+        <div class="tabpanel" id="panel-log" role="tabpanel" aria-labelledby="tab-log" hidden>
+          <div class="log-layout">
+            <div class="panel__head">
+              <h3 class="panel__title">Live Orchestrator Event Stream</h3>
+              <span class="badge badge--idle" id="run-status">queued</span>
+            </div>
+            <div class="log" id="log" role="log" aria-live="polite" aria-label="Execution log">
+              <span class="log__empty">Events will stream here.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- NOTICES AND ERRORS -->
+  <div class="notice notice--error" id="error" role="alert" hidden>
+    <span class="notice__code" id="error-code"></span>
+    <span id="error-message"></span>
+  </div>
+
+  <!-- BOTTOM COMMAND / PROMPT BAR (D始めて) -->
+  <footer class="command-bar" id="command-bar">
+    <div class="slash-command-pills" id="slash-command-pills">
+      <span class="slash-label">Quick commands:</span>
+      <button class="pill-btn" type="button" data-cmd="/plan ">/plan</button>
+      <button class="pill-btn" type="button" data-cmd="/test">/test</button>
+      <button class="pill-btn" type="button" data-cmd="/diff">/diff</button>
+      <button class="pill-btn" type="button" data-cmd="/review">/review</button>
+      <button class="pill-btn" type="button" data-cmd="/status">/status</button>
+      <button class="pill-btn" type="button" data-cmd="/help">/help</button>
     </div>
 
-    <section class="run" id="run" hidden aria-labelledby="steps-title">
-      <article class="panel">
-        <header class="panel__head">
-          <h2 class="panel__title" id="steps-title">Plan &amp; steps</h2>
-          <span class="live" id="live" hidden><span class="live__dot" aria-hidden="true"></span>live</span>
-        </header>
-        <div class="panel__body panel__body--flush">
-          <ol class="steps" id="steps">
-            <li class="artifacts__empty">Waiting for the plan…</li>
-          </ol>
+    <form class="prompt-form" id="task-form" novalidate>
+      <div class="prompt-box">
+        <label class="visually-hidden" for="task-prompt">Task Prompt</label>
+        <button class="button button--icon button--attach" type="button" id="prompt-attach-btn" title="Attach file path">
+          <span aria-hidden="true">📎</span>
+        </button>
+        <textarea
+          class="prompt-textarea"
+          id="task-prompt"
+          name="prompt"
+          rows="2"
+          maxlength="20000"
+          required
+          aria-describedby="prompt-help prompt-error"
+          placeholder="Tell the agent what to build, fix, inspect, or change... (Ctrl+Enter to send, / for slash commands)"></textarea>
+
+        <div class="prompt-controls">
+          <button class="button button--warning button--sm" type="button" id="agent-pause-btn" hidden title="Pause agent execution">
+            Pause
+          </button>
+          <button class="button button--danger button--sm" type="button" id="agent-stop-btn" hidden title="Stop running task">
+            Stop
+          </button>
+          <button class="button button--primary" type="submit" id="submit">
+            <span>Send</span>
+          </button>
         </div>
-      </article>
+      </div>
+      <p class="field-error" id="prompt-error" role="alert"></p>
+    </form>
+    <div class="visually-hidden" id="prompt-help">Ctrl+Enter submits task; agent runs locally.</div>
+  </footer>
 
-      <article class="panel">
-        <header class="panel__head">
-          <h2 class="panel__title">Execution log</h2>
-          <span class="badge badge--idle" id="run-status">queued</span>
-        </header>
-        <div class="log" id="log" role="log" aria-live="polite" aria-label="Execution log">
-          <span class="log__empty">Events will stream here.</span>
+  <!-- MODALS -->
+  <!-- SETTINGS MODAL -->
+  <dialog class="modal-dialog" id="settings-modal" aria-labelledby="settings-dialog-title">
+    <div class="modal-content">
+      <div class="modal-head">
+        <h2 class="modal-title" id="settings-dialog-title">Settings &amp; Environment</h2>
+        <button class="button button--icon" type="button" id="settings-close-btn" aria-label="Close dialog">✕</button>
+      </div>
+      <div class="modal-body" id="health" role="status" aria-live="polite">
+        <div class="settings-grid">
+          <div class="fact">
+            <span class="fact__label">Provider</span>
+            <span class="fact__value" id="health-provider">…</span>
+          </div>
+          <div class="fact">
+            <span class="fact__label">Model</span>
+            <span class="fact__value" id="health-model">…</span>
+          </div>
+          <div class="fact">
+            <span class="fact__label">Output Dir</span>
+            <span class="fact__value" id="health-output">…</span>
+          </div>
+          <div class="fact">
+            <span class="fact__label">Credential</span>
+            <span class="fact__value" id="health-key">…</span>
+          </div>
+          <div class="fact">
+            <span class="fact__label">MCP Integration</span>
+            <span class="fact__value" id="settings-mcp-status">Active</span>
+          </div>
+          <div class="fact">
+            <span class="fact__label">Git Integration</span>
+            <span class="fact__value" id="settings-git-status">Detected</span>
+          </div>
         </div>
-      </article>
-    </section>
+      </div>
+      <div class="modal-actions">
+        <button class="button button--secondary" type="button" id="refresh">Refresh Status</button>
+      </div>
+    </div>
+  </dialog>
 
-    <section class="panel" id="result-panel" hidden aria-labelledby="result-title">
-      <header class="panel__head">
-        <h2 class="panel__title" id="result-title">Deliverable</h2>
-        <span class="fact__value" id="result-files"></span>
-      </header>
-      <div class="tabs" role="tablist" aria-label="Result views">
-        <button class="tab" type="button" role="tab" id="tab-output" aria-controls="output" aria-selected="true">Output</button>
-        <button class="tab" type="button" role="tab" id="tab-report" aria-controls="report" aria-selected="false">Report</button>
-        <button class="tab" type="button" role="tab" id="tab-metrics" aria-controls="metrics" aria-selected="false">Metrics</button>
+  <!-- PR AUTOMATION MODAL -->
+  <dialog class="modal-dialog" id="pr-modal" aria-labelledby="pr-dialog-title">
+    <div class="modal-content">
+      <div class="modal-head">
+        <h2 class="modal-title" id="pr-dialog-title">Pull Request Automation</h2>
+        <button class="button button--icon" type="button" id="pr-close-btn" aria-label="Close dialog">✕</button>
       </div>
-      <div class="output" id="output" role="tabpanel" aria-labelledby="tab-output">
-        <p class="output__placeholder">Not finished yet.</p>
+      <div class="modal-body">
+        <div class="pr-preview-container" id="pr-preview-body">
+          <div class="pr-field">
+            <label class="pr-field-label" for="pr-title-input">Title</label>
+            <input type="text" class="pr-input" id="pr-title-input">
+          </div>
+          <div class="pr-field">
+            <label class="pr-field-label" for="pr-desc-textarea">Description</label>
+            <textarea class="pr-textarea" id="pr-desc-textarea" rows="6"></textarea>
+          </div>
+          <div class="pr-checks" id="pr-checks-list">
+            <div class="pr-check-item">✓ Tests verified locally</div>
+            <div class="pr-check-item">✓ Unified diff inspected</div>
+          </div>
+          <div class="pr-status-notice" id="pr-status-notice"></div>
+        </div>
       </div>
-      <div class="output" id="report" role="tabpanel" aria-labelledby="tab-report" hidden>
-        <pre class="output__prose"></pre>
+      <div class="modal-actions">
+        <button class="button button--secondary" type="button" id="pr-review-diff-btn">Review Diff</button>
+        <button class="button button--primary" type="button" id="pr-create-btn">Create PR</button>
       </div>
-      <div class="output" id="metrics" role="tabpanel" aria-labelledby="tab-metrics" hidden>
-        <div class="facts-grid" id="metrics-grid"></div>
-      </div>
-    </section>
-
-    <section class="panel" aria-labelledby="artifacts-title">
-      <header class="panel__head">
-        <h2 class="panel__title" id="artifacts-title">Output files</h2>
-        <button class="button button--quiet" type="button" id="refresh-artifacts">Reload</button>
-      </header>
-      <div class="panel__body panel__body--flush">
-        <ul class="artifacts" id="artifacts">
-          <li class="artifacts__empty">No files yet.</li>
-        </ul>
-      </div>
-    </section>
-  </main>
+    </div>
+  </dialog>
 </div>
+
+<!-- Extra Presets for test/compatibility -->
+<div class="presets" role="group" aria-label="Example tasks" hidden>
+  <button class="button" type="button" data-preset="Research the top 3 Python web frameworks and write a comparison table with sources.">Research + table</button>
+  <button class="button" type="button" data-preset="Write a Python function that parses a CSV of sales records and prints the top 5 products by revenue, then run it on a small sample.">Generate + run code</button>
+  <button class="button" type="button" data-preset="Summarise the riskiest parts of a file-processing pipeline and propose mitigations as a short report.">Analysis report</button>
+</div>
+<button class="button button--quiet" type="button" id="refresh-artifacts" hidden>Reload</button>
 
 <script src="/static/app.js" defer></script>
 </body>

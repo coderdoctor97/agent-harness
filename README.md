@@ -222,45 +222,187 @@ The centerpiece is the **skill mandate**:
 
 ## Usage
 
-### Windows: one click
+### Overview: What the Project Does
 
-Double-click **`setup.bat`** once, add your API key to the `.env` it creates, then
-double-click **`start.bat`** any time after that to launch the local web UI in your
-browser. Both scripts are idempotent and leave no background service behind.
-`start.bat /cli` runs tasks in the terminal instead; `start.bat /help` lists the flags.
+Agent Harness is a local-first autonomous AI coding and execution environment. Given a natural-language prompt:
+1. It decomposes the prompt into an explicit dependency-ordered plan.
+2. It interacts with the local workspace using tools (`file_read`, `file_write`, `shell_command`, `code_execute`, `web_search`, etc.).
+3. It executes changes, computes real-time unified diffs, runs test suites, and tracks execution metrics.
+4. It pauses at human-in-the-loop checkpoints allowing user review, approval, rejection, or mid-stream redirection.
+5. It assists with Pull Request preparation and submission to GitHub.
 
-### Local web UI
+Both a **Command Line Interface (CLI)** and a full-featured **Local Web AI Development Environment** are provided around the same agent core.
+
+---
+
+### First-Time Setup
+
+Requirements:
+- Python 3.9+ installed and on PATH
+- Git (recommended for branch and diff capabilities)
+
+#### Automated Windows Setup
+Double-click `setup.bat` or run:
+```bat
+setup.bat
+```
+This script will:
+- Check Python version compatibility (3.9+)
+- Create a local `.venv` if one does not exist
+- Install required dependencies including `[web]` and `[dev]` extras
+- Create `.env` from `.env.example` if `.env` does not already exist
+- Generate a default `config.yaml`
+- Run a post-install self-check
+
+Add your LLM API key to `.env`:
+```env
+OPENAI_API_KEY=sk-...
+```
+
+#### Manual / Cross-Platform Setup (Linux / macOS)
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[web,dev]"
+cp .env.example .env
+```
+
+---
+
+### Launching the Application
+
+#### Windows: One-Click Launch
+Double-click `start.bat` or run from terminal:
+```bat
+start.bat                  :: Start server on http://127.0.0.1:8765 and open default browser
+start.bat /port 8000       :: Custom port (e.g. 8000)
+start.bat /host 0.0.0.0    :: Custom bind host
+start.bat /noopen          :: Start server without opening browser
+start.bat /cli             :: Terminal CLI mode instead of Web UI
+start.bat /help            :: Command summary
+```
+
+#### Linux / macOS / Terminal
+```bash
+# Start local web development environment
+python -m agent_harness.web --host 127.0.0.1 --port 8000
+
+# Default URLs:
+#   http://127.0.0.1:8000  or  http://localhost:8765
+```
+
+---
+
+### Web UI Workflow
+
+The Web UI provides an Arena-style dark developer IDE split-pane layout:
+
+```text
+USER
+ ↓
+Enter task in prompt bar
+ ↓
+Agent reads workspace & inspects context
+ ↓
+Agent generates implementation plan
+ ↓
+Agent executes tools & modifies files
+ ↓
+Agent runs tests/checks
+ ↓
+Human-in-the-loop Checkpoint
+ ↓
+User reviews diff & approves / rejects / intervenes
+ ↓
+Agent continues to completion
+ ↓
+Inspect deliverable & optionally create PR
+```
+
+#### 1. Top Bar
+- **Project Name & Workspace:** Displays current directory and repository name.
+- **Connection Status:** Displays `● Local Sandbox` when operating completely locally without GitHub, or `● GitHub Connected` when a GitHub remote and credentials are detected.
+- **Branch Indicator:** Shows the active Git branch (e.g. `arena/01a0b38d-agent-harness`).
+- **Agent Status:** Visually reflects `Idle`, `Running`, `Paused`, `Awaiting Input`, `Completed`, or `Failed`.
+- **Settings (⚙):** Inspect active provider, model, tokens, and MCP integration status.
+
+#### 2. Left Control Panel
+- **Agent Session:** Displays active task prompt, elapsed clock, execution phase, live activity list, and active tool.
+- **Roadmap:** Visual checklist tracking progress through:
+  - `Analyze repository`
+  - `Understand architecture`
+  - `Create implementation plan`
+  - `Implement changes`
+  - `Run tests`
+  - `Review changes`
+  - `Human approval`
+  - `Create PR`
+- **Human-in-the-Loop Checkpoint Card:** Pauses execution after critical phases. Summarizes files changed, tests passed, and provides `[Review Changes]`, `[Approve & Continue]`, and `[Reject]` actions.
+- **MCP / GitHub Automation:** Displays remote tracking and PR automation triggers.
+
+#### 3. Main Workspace Tabs
+- **Files:** Hierarchical explorer of the workspace with path safety and modified file indicators.
+- **Code:** Code viewer and editor with line numbers, syntax hints, and safe file saving (`POST /api/files/save`).
+- **Diff:** Unified diff viewer displaying exact line-by-line additions (`+`) and deletions (`-`) with change summaries.
+- **Preview:** Rendered final deliverable, execution report, metrics, and generated output files.
+- **Terminal:** Controlled runtime console for executing commands like `pytest`, `ruff check .`, and `git status`.
+- **Steps & Log:** Structured plan breakdown and raw Server-Sent Event stream.
+
+#### 4. Bottom Command Bar
+- Supports multiline task prompts (`Ctrl+Enter` to submit).
+- **Slash Commands:**
+  - `/plan <task>` — Decompose task into steps without executing (dry-run).
+  - `/test [filter]` — Execute test suite directly in the terminal panel.
+  - `/diff` — Switch to Diff viewer and refresh workspace diff.
+  - `/review` — Review recent changes and modifications.
+  - `/status` — Inspect system status and configuration.
+  - `/help` — View available slash commands.
+- **Controls:** `Pause` and `Stop` buttons allow interrupting in-flight agent tasks safely.
+
+---
+
+### Local Sandbox Mode vs. GitHub / MCP Mode
+
+- **Local Sandbox Mode (`● Local Sandbox`):** Operates 100% locally on your machine with no external services, no cloud database, and no mandatory GitHub connection. All task planning, tool execution, file manipulation, diff generation, and test runs work offline.
+- **GitHub / MCP Mode (`● GitHub Connected`):** Activated automatically when a Git repository with GitHub remote and `gh` or token is configured. Enables branch switching and one-click Pull Request creation based on real workspace changes.
+
+---
+
+### CLI Usage
+
+The existing Python CLI remains fully functional:
 
 ```bash
-pip install "agent-harness[web]"
-python -m agent_harness.web          # http://localhost:8765 — browser opens itself
+# Execute a task
+python -m agent_harness "Analyze test failures and report root causes"
+
+# Inspect the decomposition plan without executing (dry-run)
+python -m agent_harness --dry-run "Build REST API authentication"
+
+# List all registered and plugin tools
+python -m agent_harness --list-tools
+
+# Specify custom configuration and logging
+python -m agent_harness --config ./config.yaml --log-level DEBUG "Task prompt"
 ```
 
-Enter a task, watch the plan execute step by step with live status and a raw event
-log, then read the assembled deliverable, the execution report, the metrics and every
-file the run produced. See [`documentations/web-ui.md`](documentations/web-ui.md) for
-the full guide and [`ADR-001`](documentations/adr/ADR-001-local-web-ui.md) for why it
-is built this way.
+---
 
-```bash
-# CLI (SPEC-005)
-python -m agent_harness "Research the top 5 AI models, compare them, and create a PDF report"
-python -m agent_harness --dry-run "..."      # inspect the plan without executing
-python -m agent_harness --list-tools         # show the tool registry
-```
+### Troubleshooting
 
-```python
-# Python API (SPEC-005)
-from agent_harness import AgentHarness, Config
+- **Server port already in use:** Specify a different port using `start.bat /port 8899` or `--port 8899`.
+- **Missing API key error:** Copy `.env.example` to `.env` and set `OPENAI_API_KEY=sk-...` (or your preferred provider's key).
+- **Web UI dependencies missing:** Run `pip install -e ".[web]"`.
+- **Permission error during file save:** Ensure the target file is inside the workspace root; writes outside the workspace root are blocked by security policy.
 
-harness = AgentHarness(Config.from_file("./config.yaml"))
-result = harness.run("Read data.csv and generate a bar chart of sales by region")
-print(result.status, result.files_created, result.metrics)
-```
+---
 
-```python
-# Custom tool (SPEC-002): implement BaseTool, drop the file into plugins/
-```
+### Security Notes
+
+- **Path Containment:** All file reads, writes, and listings are bounded strictly to the workspace root directory; path traversal attacks (e.g. `../`) are rejected with `403 Forbidden`.
+- **Protected Files:** Sensitive credential files such as `.env`, `.git/config`, and private keys are blocked from API access.
+- **Subprocess Isolation:** The runtime terminal only executes controlled, allowlisted developer commands (`pytest`, `ruff`, `mypy`, `git`). Shell injection and chained command operators are strictly rejected.
+- **No Secret Leakage:** API keys and credentials are never logged or returned in HTTP response payloads.
 
 ---
 

@@ -453,3 +453,169 @@ class TestRunnerLifecycle:
 def both_terminal(runner: Any, *ids: str) -> bool:
     """Whether every listed task has reached a terminal state."""
     return all(runner.get(task_id).terminal for task_id in ids)
+
+
+class TestOverallStatus:
+    """``GET /api/status`` — overall developer environment status."""
+
+    def test_status_returns_ok_and_environment(self, client: Any) -> None:
+        res = client.get("/api/status")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["ok"] is True
+        assert "agent_state" in body
+        assert "workspace" in body
+        assert "git" in body
+        assert "mcp" in body
+
+
+class TestWorkspaceAndFiles:
+    """Workspace inspection, file hierarchy, file reading/saving, path safety."""
+
+    def test_workspace_overview(self, client: Any) -> None:
+        res = client.get("/api/workspace")
+        assert res.status_code == 200
+        body = res.json()
+        assert "name" in body
+        assert "root_path" in body
+        assert "is_git" in body
+
+    def test_list_files(self, client: Any) -> None:
+        res = client.get("/api/files")
+        assert res.status_code == 200
+        body = res.json()
+        assert "tree" in body
+        assert isinstance(body["tree"], list)
+
+    def test_read_valid_file(self, client: Any) -> None:
+        res = client.get("/api/files/pyproject.toml")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["path"] == "pyproject.toml"
+        assert "agent-harness" in body["content"]
+        assert body["language"] == "toml"
+
+    def test_path_traversal_protection(self, client: Any) -> None:
+        res = client.get("/api/files/..%2F..%2Fetc%2Fpasswd")
+        assert res.status_code == 403
+
+    def test_sensitive_file_protection(self, client: Any) -> None:
+        res = client.get("/api/files/.env")
+        assert res.status_code == 403
+
+    def test_missing_file_returns_404(self, client: Any) -> None:
+        res = client.get("/api/files/nonexistent_file_xyz.py")
+        assert res.status_code == 404
+
+    def test_save_file_safely(self, client: Any, scratch: pathlib.Path) -> None:
+        save_path = "tests/scratch_test_file.txt"
+        res = client.post("/api/files/save", json={"path": save_path, "content": "hello world"})
+        assert res.status_code == 200
+        assert res.json()["success"] is True
+
+        # Clean up
+        test_file = pathlib.Path(save_path)
+        if test_file.exists():
+            test_file.unlink()
+
+
+class TestDiffAPI:
+    """Unified diff generation."""
+
+    def test_diff_endpoint(self, client: Any) -> None:
+        res = client.get("/api/diff")
+        assert res.status_code == 200
+        body = res.json()
+        assert "summary" in body
+        assert "files" in body
+        assert isinstance(body["files"], list)
+
+
+class TestAgentControls:
+    """Interactive controls: pause, resume, stop, checkpoints, intervention."""
+
+    def test_pause_and_resume_agent(self, client: Any, runner: Any) -> None:
+        task = runner.submit("research something")
+        res_pause = client.post("/api/agent/pause", json={"task_id": task.id})
+        assert res_pause.status_code == 200
+        assert res_pause.json()["status"] == "paused"
+
+        res_resume = client.post("/api/agent/resume", json={"task_id": task.id, "instruction": "continue"})
+        assert res_resume.status_code == 200
+        assert res_resume.json()["status"] == "running"
+
+    def test_stop_agent(self, client: Any, runner: Any) -> None:
+        task = runner.submit("build a feature")
+        # Ensure task is marked running so stop can take effect regardless of thread race
+        with runner._lock:
+            task.status = "running"
+            task.finished_at = None
+        res_stop = client.post("/api/agent/stop", json={"task_id": task.id})
+        assert res_stop.status_code == 200
+        assert res_stop.json()["status"] == "stopped"
+
+    def test_intervene_agent(self, client: Any, runner: Any) -> None:
+        task = runner.submit("initial prompt")
+        res = client.post("/api/agent/intervene", json={"task_id": task.id, "instruction": "use postgresql"})
+        assert res.status_code == 200
+
+    def test_checkpoint_approval_and_rejection(self, client: Any, runner: Any) -> None:
+        task = runner.submit("task with checkpoint")
+        task.checkpoint = {
+            "id": "chk_1",
+            "phase": "Implementation",
+            "message": "Phase finished",
+            "files_changed": 3,
+            "tests_passed": 12,
+        }
+        task.status = "awaiting_input"
+
+        res_appr = client.post("/api/agent/approve", json={"task_id": task.id})
+        assert res_appr.status_code == 200
+        assert res_appr.json()["status"] == "running"
+
+        # Re-set checkpoint to test rejection
+        task.checkpoint = {"id": "chk_2", "phase": "Verification"}
+        task.status = "awaiting_input"
+        res_rej = client.post("/api/agent/reject", json={"task_id": task.id, "reason": "not satisfied"})
+        assert res_rej.status_code == 200
+        assert res_rej.json()["status"] == "stopped"
+
+
+class TestGitHubAndPR:
+    """Git/GitHub status and PR preparation."""
+
+    def test_github_status(self, client: Any) -> None:
+        res = client.get("/api/github/status")
+        assert res.status_code == 200
+        body = res.json()
+        assert "is_git" in body
+        assert "branch" in body
+
+    def test_pr_prepare(self, client: Any) -> None:
+        res = client.post("/api/pr/prepare")
+        assert res.status_code == 200
+        body = res.json()
+        assert "title" in body
+        assert "description" in body
+        assert "tests_checklist" in body
+
+    def test_pr_create_disconnected_raises_400_or_runs(self, client: Any) -> None:
+        # If GitHub is not connected or disconnected, returns clean error
+        res = client.post("/api/pr/create", json={"title": "Test PR", "description": "Desc"})
+        assert res.status_code in (200, 400)
+
+
+class TestTerminalRunner:
+    """Controlled developer command execution."""
+
+    def test_run_allowed_command(self, client: Any) -> None:
+        res = client.post("/api/terminal/run", json={"command": "python -c \"print('terminal test')\""})
+        assert res.status_code == 200
+        body = res.json()
+        assert "terminal test" in body["stdout"]
+        assert body["exit_code"] == 0
+
+    def test_forbidden_command_rejected(self, client: Any) -> None:
+        res = client.post("/api/terminal/run", json={"command": "rm -rf /"})
+        assert res.status_code == 400
