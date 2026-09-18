@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import importlib
 import sys
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import _p4_stubs as stubs  # after the sys.path bootstrap above
+import _p4_doubles as doubles  # after the sys.path bootstrap above
 
 from agent_harness import __main__ as cli_module
 from agent_harness.__main__ import (
@@ -32,16 +31,12 @@ from agent_harness.__main__ import (
 )
 
 
-def test_stubs_are_installed() -> None:
-    """Guard: these tests must run against the P4 stubs, never real modules."""
-    assert stubs.Config().execution.max_steps == 20
+def test_the_real_modules_are_installed() -> None:
+    """Guard: the CLI suite runs against the composed system, never over a fake one."""
+    import agent_harness.tools as tools_module
 
-
-@pytest.fixture(name="stubbed")
-def _stubbed() -> Iterator[list[str]]:
-    """Install the Plan 1-3 stub modules under their real dotted names."""
-    with stubs.stub_modules() as installed:
-        yield installed
+    assert tools_module.BaseTool is doubles.BaseTool
+    assert doubles.Config().execution.max_steps == 20
 
 
 # ---------------------------------------------------------------------------
@@ -296,13 +291,12 @@ class TestConfigPathResolution:
         assert resolve_config_path(parse_args(["--list-tools"])) == "./config.yaml"
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestOverrideMapping:
     """Plan 4.1 exit criterion: every flag produces the documented override."""
 
     def test_no_flags_leave_the_config_alone(self) -> None:
         """The mapping is opt-in."""
-        config = stubs.Config()
+        config = doubles.Config()
         before = config.to_dict(redact_secrets=False)
 
         apply_cli_overrides(config, parse_args(["task"]))
@@ -311,7 +305,7 @@ class TestOverrideMapping:
 
     def test_output_dir_maps_to_execution_output_dir(self) -> None:
         """SPEC-005 § 2 row 3."""
-        config = stubs.Config()
+        config = doubles.Config()
 
         apply_cli_overrides(config, parse_args(["--output-dir", "/tmp/out", "task"]))
 
@@ -319,7 +313,7 @@ class TestOverrideMapping:
 
     def test_max_steps_maps_to_execution_max_steps(self) -> None:
         """SPEC-005 § 2 row 8."""
-        config = stubs.Config()
+        config = doubles.Config()
 
         apply_cli_overrides(config, parse_args(["--max-steps", "5", "task"]))
 
@@ -327,7 +321,7 @@ class TestOverrideMapping:
 
     def test_log_level_maps_to_logging_level(self) -> None:
         """SPEC-005 § 2 row 4."""
-        config = stubs.Config()
+        config = doubles.Config()
 
         apply_cli_overrides(config, parse_args(["--log-level", "ERROR", "task"]))
 
@@ -335,7 +329,7 @@ class TestOverrideMapping:
 
     def test_no_fallback_disables_replan(self) -> None:
         """SPEC-005 § 2 row 9 — the config half of the flag."""
-        config = stubs.Config()
+        config = doubles.Config()
         assert config.execution.enable_replan is True
 
         apply_cli_overrides(config, parse_args(["--no-fallback", "task"]))
@@ -347,7 +341,7 @@ class TestOverrideMapping:
     ) -> None:
         """SPEC-006 § 1.2 — env sits between CLI and file."""
         monkeypatch.setenv("AGENT_HARNESS_LOG_LEVEL", "WARNING")
-        config = stubs.Config()
+        config = doubles.Config()
 
         apply_cli_overrides(config, parse_args(["task"]))
 
@@ -358,7 +352,7 @@ class TestOverrideMapping:
     ) -> None:
         """CLI is highest precedence."""
         monkeypatch.setenv("AGENT_HARNESS_LOG_LEVEL", "WARNING")
-        config = stubs.Config()
+        config = doubles.Config()
 
         apply_cli_overrides(config, parse_args(["--log-level", "DEBUG", "task"]))
 
@@ -369,7 +363,7 @@ class TestOverrideMapping:
     ) -> None:
         """A typo in the environment must not corrupt the config."""
         monkeypatch.setenv("AGENT_HARNESS_LOG_LEVEL", "shouty")
-        config = stubs.Config()
+        config = doubles.Config()
 
         apply_cli_overrides(config, parse_args(["task"]))
 
@@ -377,7 +371,7 @@ class TestOverrideMapping:
 
     def test_several_flags_apply_together(self) -> None:
         """The whole table at once."""
-        config = stubs.Config()
+        config = doubles.Config()
 
         apply_cli_overrides(
             config,
@@ -401,13 +395,19 @@ class TestOverrideMapping:
         assert config.execution.enable_replan is False
 
     def test_a_config_with_apply_overrides_is_used_when_present(self) -> None:
-        """Plan 4.1 names ``Config.apply_overrides`` as the P1 seam."""
+        """Plan 1's ``apply_overrides`` is the seam, and its hooks are flat names.
+
+        SPEC-006 § 1.2 names the hooks ``output_dir`` / ``log_level`` / ``max_steps`` /
+        ``no_fallback``, so Plan 4 translates its dotted paths before the call. The
+        stub-era assertion pinned a *positional mapping*, which the shipped
+        keyword-only signature rejects (SCR-P4-11).
+        """
         calls: list[dict[str, Any]] = []
 
         class RecordingConfig:
-            def apply_overrides(self, overrides: dict[str, Any]) -> None:
-                """Capture the mapping P1 is expected to apply."""
-                calls.append(overrides)
+            def apply_overrides(self, **hooks: Any) -> None:
+                """Capture the hooks P1 is asked to apply."""
+                calls.append(hooks)
 
         config = RecordingConfig()
 
@@ -415,11 +415,20 @@ class TestOverrideMapping:
             config, parse_args(["--max-steps", "9", "--no-fallback", "task"])
         )
 
-        assert calls == [{"execution.max_steps": 9, "execution.enable_replan": False}]
+        assert calls == [{"max_steps": 9, "no_fallback": True}]
+
+    def test_the_hook_translation_covers_every_dotted_path(self) -> None:
+        """No path :func:`collect_overrides` can emit lacks a hook name (SCR-P4-9)."""
+        from agent_harness.__main__ import OVERRIDE_PATHS, _hook_kwargs
+
+        translated = _hook_kwargs(dict.fromkeys(OVERRIDE_PATHS.values(), 1))
+
+        assert set(translated) == set(OVERRIDE_PATHS)
+        assert _hook_kwargs({"execution.enable_replan": False}) == {"no_fallback": True}
 
     def test_the_override_mapping_is_dotted_paths(self) -> None:
         """The seam takes ``config.get``-style keys, not attribute names."""
-        config = stubs.Config()
+        config = doubles.Config()
 
         apply_cli_overrides(config, parse_args(["--output-dir", "/x", "task"]))
 
@@ -454,10 +463,10 @@ from agent_harness.__main__ import (  # noqa: E402
 
 def _fake_plan(n_steps: int = 2) -> Any:
     """A small execution plan for dry-run rendering."""
-    plan = stubs.ExecutionPlan(original_prompt="do things")
+    plan = doubles.ExecutionPlan(original_prompt="do things")
     for index in range(n_steps):
         plan.steps.append(
-            stubs.Step(
+            doubles.Step(
                 id=f"step{index + 1}",
                 description=f"Do step {index + 1}",
                 tool_name="echo",
@@ -551,13 +560,12 @@ def _factory_for(harness: _FakeHarness) -> Any:
 
 
 def _agent_error(message: str = "boom") -> Any:
-    """An ``AgentError`` from the stubs."""
-    return stubs.AgentError(
+    """An ``AgentError`` from the doubles."""
+    return doubles.AgentError(
         code="TOOL_EXECUTION_FAILED", message=message, component="test"
     )
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestListToolsDispatch:
     """SPEC-005 § 2 row 6 and SPEC-006 K5."""
 
@@ -620,7 +628,6 @@ class TestListToolsDispatch:
         assert "No tools" in out
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestDryRunDispatch:
     """SPEC-005 § 2 row 5 — print the plan, do not execute."""
 
@@ -667,7 +674,6 @@ class TestDryRunDispatch:
         assert "planner exploded" in err
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestRunDispatch:
     """SPEC-005 § 2.1 — status to exit code."""
 
@@ -722,11 +728,12 @@ class TestRunDispatch:
     def test_a_config_error_exits_one(self, capsys: Any, tmp_path: Any) -> None:
         """A config file the loader cannot parse is an unhandled ``AgentError``.
 
-        The stub Config refuses to parse an existing file (parsing YAML is
-        Plan 1's job), which is exactly the failure shape this path must handle.
+        The stub-era version of this test relied on the stub refusing to parse *any*
+        existing file; the shipped loader parses valid YAML, so the file has to be
+        genuinely unreadable to reach the ``CONFIG_LOAD_FAILED`` path (SCR-P4-11).
         """
         config_file = tmp_path / "config.yaml"
-        config_file.write_text("llm:\n  provider: openai\n", encoding="utf-8")
+        config_file.write_text("llm: [unclosed\n", encoding="utf-8")
         harness = _FakeHarness(None)
 
         code = main(
@@ -739,7 +746,6 @@ class TestRunDispatch:
         assert not any(c.startswith("run:") for c in harness.calls)
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestUsageAndTeardown:
     """Exit code 2, and a harness that is always closed."""
 
@@ -800,42 +806,70 @@ class TestUsageAndTeardown:
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-#: Runs the real ``python -m agent_harness`` entry point inside a subprocess,
-#: with the P4 stubs installed so no Plan 1-3 module is needed. Printing the
-#: code and exiting with it is what makes the assertion a true process-level
-#: check rather than an in-process return value.
+#: Runs the real ``python -m agent_harness`` entry point inside a subprocess against
+#: the **composed system** (I1). The exit code is what is asserted, so the run must go
+#: through ``main()`` for real; the only injection is a scripted ``MockLLMClient``, so
+#: no process here needs credentials or a network.
 _SUBPROCESS_SCRIPT = """
+import os
 import sys
 sys.path.insert(0, {tests!r})
 sys.path.insert(0, {root!r})
-import _p4_stubs as stubs
+
+import _p4_doubles as doubles
+
 mode = sys.argv[1]
 argv = sys.argv[2:]
-with stubs.stub_modules():
-    if mode == "module":
-        sys.argv = ["agent_harness", *argv]
-        import runpy
-        runpy.run_module("agent_harness", run_name="__main__")
-    else:
-        from agent_harness.__main__ import main
-        raise SystemExit(main(argv))
+
+from agent_harness import AgentHarness, Config
+from agent_harness.__main__ import main
+
+if mode == "module":
+    # The real entry point, with the real composition root: used for the keyless
+    # ``--list-tools`` and missing-credential cases.
+    sys.argv = ["agent_harness", *argv]
+    import runpy
+
+    runpy.run_module("agent_harness", run_name="__main__")
+else:
+    # ``main`` mode: a scripted client, so a *completed* run can be asserted
+    # without credentials and without touching the network.
+    config = Config()
+    config.execution.output_dir = os.path.join(os.environ["HARNESS_SCRATCH"], "out")
+    config.execution.temp_dir = os.path.join(os.environ["HARNESS_SCRATCH"], "tmp")
+    client = doubles.MockLLMClient(
+        [{{"steps": [{{"description": "write the result", "tool_hint": "file_write",
+                      "input_data": {{
+                          "path": os.path.join(config.execution.output_dir, "out.txt"),
+                          "content": "done"}},
+                      "priority": "critical"}}]}}]
+    )
+
+    def factory(_config):
+        return AgentHarness(config, llm_client=client)
+
+    raise SystemExit(main(argv, harness_factory=factory))
 """
 
 
-def _subprocess_env(**extra: str) -> dict[str, str]:
-    """The current environment plus overrides, for a subprocess run."""
+def _subprocess_env(scratch: str, **extra: str) -> dict[str, str]:
+    """The current environment plus the run's scratch directory and overrides."""
     import os
 
-    return {**os.environ, **extra}
+    env = {**os.environ, "HARNESS_SCRATCH": scratch, **extra}
+    env.setdefault("OPENAI_API_KEY", "test-key-not-a-secret")
+    return env
 
 
 def _run_cli_subprocess(mode: str, *argv: str, **env: str) -> Any:
     """Run the CLI in a fresh interpreter and return the completed process."""
     import subprocess
+    import tempfile
 
     script = _SUBPROCESS_SCRIPT.format(
         tests=str(REPO_ROOT / "tests"), root=str(REPO_ROOT)
     )
+    scratch = tempfile.mkdtemp(prefix="agent-harness-cli-")
     return subprocess.run(
         [sys.executable, "-c", script, mode, *argv],
         capture_output=True,
@@ -843,7 +877,7 @@ def _run_cli_subprocess(mode: str, *argv: str, **env: str) -> Any:
         timeout=120,
         check=False,
         cwd=str(REPO_ROOT),
-        env=_subprocess_env(**env),
+        env=_subprocess_env(scratch, **env),
     )
 
 
@@ -872,59 +906,27 @@ class TestProcessLevelExitCodes:
 
     def test_list_tools_exits_zero_in_a_subprocess(self) -> None:
         """A full run of the dispatch path, in a real process."""
-        proc = _run_cli_subprocess("main", "--list-tools")
+        proc = _run_cli_subprocess("module", "--list-tools")
 
         assert proc.returncode == EXIT_OK
-        assert "echo" in proc.stdout
+        assert "web_search" in proc.stdout
 
     def test_a_completed_run_exits_zero_in_a_subprocess(self) -> None:
-        """End to end through ``main()`` with the stub harness."""
-        proc = _run_cli_subprocess(
-            "main", "do something", OPENAI_API_KEY="test-key-not-a-secret"
-        )
+        """End to end through ``main()`` with a scripted client (I1: real harness)."""
+        proc = _run_cli_subprocess("main", "do something")
 
         assert proc.returncode == EXIT_OK
         assert "Status: completed" in proc.stdout
 
     def test_no_api_key_is_needed_for_list_tools_in_a_subprocess(self) -> None:
-        """SPEC-006 K5, at process level."""
-        import os
-        import subprocess
-
-        env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
-        script = _SUBPROCESS_SCRIPT.format(
-            tests=str(REPO_ROOT / "tests"), root=str(REPO_ROOT)
-        )
-        proc = subprocess.run(
-            [sys.executable, "-c", script, "main", "--list-tools"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-            cwd=str(REPO_ROOT),
-            env=env,
-        )
+        """SPEC-006 K5, at process level, against the real composition root."""
+        proc = _run_cli_subprocess("module", "--list-tools", OPENAI_API_KEY="")
 
         assert proc.returncode == EXIT_OK
 
     def test_a_missing_api_key_makes_a_run_exit_one(self) -> None:
-        """The companion case: running *does* need credentials."""
-        import os
-        import subprocess
-
-        env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
-        script = _SUBPROCESS_SCRIPT.format(
-            tests=str(REPO_ROOT / "tests"), root=str(REPO_ROOT)
-        )
-        proc = subprocess.run(
-            [sys.executable, "-c", script, "main", "do something"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-            cwd=str(REPO_ROOT),
-            env=env,
-        )
+        """The companion case: a real run *does* need credentials."""
+        proc = _run_cli_subprocess("module", "do something", OPENAI_API_KEY="")
 
         assert proc.returncode == EXIT_FAILED
         assert "OPENAI_API_KEY" in proc.stderr
@@ -1054,7 +1056,6 @@ class TestPlainRendering:
         """Nor in the result renderer."""
         assert ANSI.search(_render_result(_fake_result("completed"))) is None
 
-    @pytest.mark.usefixtures("stubbed")
     def test_piped_list_tools_output_has_no_escape_codes(self, capsys: Any) -> None:
         """The whole dispatch path, captured as a pipe would see it."""
         harness = _FakeHarness(None, tools=SAMPLE_TOOLS)
@@ -1063,7 +1064,6 @@ class TestPlainRendering:
 
         assert ANSI.search(capsys.readouterr().out) is None
 
-    @pytest.mark.usefixtures("stubbed")
     def test_piped_dry_run_output_has_no_escape_codes(self, capsys: Any) -> None:
         """Capsys is not a TTY, so this is the piped case."""
         harness = _FakeHarness(None)
@@ -1109,7 +1109,6 @@ class TestRichRendering:
             assert token in bare
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestLiveProgress:
     """SPEC-005 § 2.2 — live step progress through the Phase 2.3 hook seam."""
 
@@ -1182,7 +1181,6 @@ class TestLiveProgress:
         assert harness.progress_callback is None
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestStyledDispatch:
     """The interactive path through ``main()`` itself.
 
@@ -1247,7 +1245,7 @@ class TestStyledDispatch:
 # ---------------------------------------------------------------------------
 
 
-class _FallbackPlanner(stubs.Planner):
+class _FallbackPlanner(doubles.Planner):
     """Plans one step that carries a fallback tool."""
 
     def plan(
@@ -1256,13 +1254,13 @@ class _FallbackPlanner(stubs.Planner):
         available_tools: list[dict[str, Any]],
         *,
         context: dict[str, Any] | None = None,
-    ) -> stubs.ExecutionPlan:
+    ) -> doubles.ExecutionPlan:
         """Return a single-step plan asking for a fallback."""
-        return stubs.ExecutionPlan(
+        return doubles.ExecutionPlan(
             original_prompt=prompt,
             context={"available_tools": available_tools, "planner_context": context},
             steps=[
-                stubs.Step(
+                doubles.Step(
                     id="s1",
                     description="first",
                     tool_name="echo",
@@ -1272,20 +1270,20 @@ class _FallbackPlanner(stubs.Planner):
         )
 
 
-class _CapturingOrchestrator(stubs.Orchestrator):
+class _CapturingOrchestrator(doubles.Orchestrator):
     """Records the plan it was handed."""
 
     def __init__(self) -> None:
         """Start empty."""
-        super().__init__(stubs.ToolRegistry(), stubs.Config())
-        self.seen: stubs.ExecutionPlan | None = None
+        super().__init__(doubles.ToolRegistry(), doubles.Config())
+        self.seen: doubles.ExecutionPlan | None = None
 
-    def execute(self, plan: stubs.ExecutionPlan) -> stubs.ExecutionPlan:
+    def execute(self, plan: doubles.ExecutionPlan) -> doubles.ExecutionPlan:
         """Record the plan and mark it successful."""
         self.seen = plan
         for step in plan.steps:
-            step.status = stubs.StepStatus.SUCCESS
-        plan.status = stubs.StepStatus.SUCCESS
+            step.status = doubles.StepStatus.SUCCESS
+        plan.status = doubles.StepStatus.SUCCESS
         return plan
 
 
@@ -1298,15 +1296,14 @@ def _real_harness_factory(
     def factory(config: Any) -> Any:
         return AgentHarness(
             config,
-            llm_client=stubs.MockLLMClient(),
-            planner=_FallbackPlanner(stubs.MockLLMClient(), config),
+            llm_client=doubles.MockLLMClient(),
+            planner=_FallbackPlanner(doubles.MockLLMClient(), config),
             orchestrator=orchestrator,
         )
 
     return factory
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestNoFallbackFlag:
     """SPEC-005 § 2 row 9 — the flag, followed all the way to the plan."""
 
@@ -1345,7 +1342,6 @@ class TestNoFallbackFlag:
         assert harness.config.get("execution.enable_replan") is False
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestLogLevelChain:
     """SPEC-006 § 1.2 — CLI over environment over file, end to end."""
 
@@ -1391,7 +1387,7 @@ class TestLogLevelChain:
 # ---------------------------------------------------------------------------
 
 
-class _SmokePlanner(stubs.Planner):
+class _SmokePlanner(doubles.Planner):
     """Plans a fixed two-step task against the ``echo`` tool."""
 
     def __init__(self, llm_client: Any, config: Any, **kwargs: Any) -> None:
@@ -1406,16 +1402,16 @@ class _SmokePlanner(stubs.Planner):
         available_tools: list[dict[str, Any]],
         *,
         context: dict[str, Any] | None = None,
-    ) -> stubs.ExecutionPlan:
+    ) -> doubles.ExecutionPlan:
         """Return a deterministic plan; the tools list is recorded, not needed."""
         self.seen_tools = available_tools
         self.seen_prompt = prompt
-        return stubs.ExecutionPlan(
+        return doubles.ExecutionPlan(
             original_prompt=prompt,
             context={"planner_context": context},
             steps=[
-                stubs.Step(id="s1", description="Gather input", tool_name="echo"),
-                stubs.Step(
+                doubles.Step(id="s1", description="Gather input", tool_name="echo"),
+                doubles.Step(
                     id="s2",
                     description="Write the report",
                     tool_name="echo",
@@ -1425,15 +1421,15 @@ class _SmokePlanner(stubs.Planner):
         )
 
 
-class _SmokeOrchestrator(stubs.Orchestrator):
+class _SmokeOrchestrator(doubles.Orchestrator):
     """Executes the plan to a chosen outcome."""
 
     def __init__(self, outcome: str = "completed") -> None:
         """Store the outcome to simulate."""
-        super().__init__(stubs.ToolRegistry(), stubs.Config())
+        super().__init__(doubles.ToolRegistry(), doubles.Config())
         self._outcome = outcome
 
-    def execute(self, plan: stubs.ExecutionPlan) -> stubs.ExecutionPlan:
+    def execute(self, plan: doubles.ExecutionPlan) -> doubles.ExecutionPlan:
         """Mark the steps so the assembler derives the intended status.
 
         ``failed`` must fail *every* step: the stub assembler calls a run
@@ -1447,15 +1443,15 @@ class _SmokeOrchestrator(stubs.Orchestrator):
                 self._outcome == "partial" and index == 0
             )
             if succeeded:
-                step.status = stubs.StepStatus.SUCCESS
+                step.status = doubles.StepStatus.SUCCESS
                 step.output_data = f"{step.description}: done"
             else:
-                step.status = stubs.StepStatus.FAILED
+                step.status = doubles.StepStatus.FAILED
                 step.error = "tool returned an error"
         plan.status = (
-            stubs.StepStatus.SUCCESS
+            doubles.StepStatus.SUCCESS
             if self._outcome == "completed"
-            else stubs.StepStatus.FAILED
+            else doubles.StepStatus.FAILED
         )
         return plan
 
@@ -1467,15 +1463,14 @@ def _smoke_factory(outcome: str = "completed") -> Any:
     def factory(config: Any) -> Any:
         return AgentHarness(
             config,
-            llm_client=stubs.MockLLMClient(),
-            planner=_SmokePlanner(stubs.MockLLMClient(), config),
+            llm_client=doubles.MockLLMClient(),
+            planner=_SmokePlanner(doubles.MockLLMClient(), config),
             orchestrator=_SmokeOrchestrator(outcome),
         )
 
     return factory
 
 
-@pytest.mark.usefixtures("stubbed")
 class TestCliSmoke:
     """Every documented command, through ``main()``, against a real harness."""
 
@@ -1555,11 +1550,11 @@ class TestCliSmoke:
         def factory(config: Any) -> Any:
             from agent_harness.harness import AgentHarness
 
-            planner = _SmokePlanner(stubs.MockLLMClient(), config)
+            planner = _SmokePlanner(doubles.MockLLMClient(), config)
             seen["planner"] = planner
             return AgentHarness(
                 config,
-                llm_client=stubs.MockLLMClient(),
+                llm_client=doubles.MockLLMClient(),
                 planner=planner,
                 orchestrator=_SmokeOrchestrator("completed"),
             )
@@ -1578,21 +1573,23 @@ class TestCliSmoke:
         (plugin_dir / "broken.py").write_text(
             "class Broken(BaseTool:\n    pass\n", encoding="utf-8"
         )
-        config = stubs.Config()
+        config = doubles.Config()
         config.plugins.dirs = [str(plugin_dir)]
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("logging:\n  level: INFO\n", encoding="utf-8")
 
         def factory(cfg: Any) -> Any:
             from agent_harness.harness import AgentHarness
 
             return AgentHarness(
                 cfg,
-                llm_client=stubs.MockLLMClient(),
-                planner=_SmokePlanner(stubs.MockLLMClient(), cfg),
+                llm_client=doubles.MockLLMClient(),
+                planner=_SmokePlanner(doubles.MockLLMClient(), cfg),
                 orchestrator=_SmokeOrchestrator("completed"),
             )
 
         code = main(
-            ["--config", str(tmp_path / "absent.yaml"), "--list-tools"],
+            ["--config", str(config_file), "--list-tools"],
             harness_factory=_factory_with_config(factory, config),
         )
         out = capsys.readouterr().out
@@ -1623,7 +1620,6 @@ def _factory_with_config(inner: Any, config: Any) -> Any:
 class TestNoNetwork:
     """The suite must not touch the network, ever."""
 
-    @pytest.mark.usefixtures("stubbed")
     def test_no_socket_is_opened_during_a_full_run(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

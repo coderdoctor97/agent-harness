@@ -64,10 +64,46 @@ class Orchestrator:
         for step in ordered:
             self._execute_step(step, plan, context)
 
+        self._finalize(plan)
+
         if self.hooks and self.hooks.on_plan_complete:
             self._safe_hook(lambda: self.hooks.on_plan_complete(plan))
 
         return plan
+
+    def _finalize(self, plan: Any) -> None:
+        """Set the plan's terminal status, aborting on a failed CRITICAL step.
+
+        SPEC-003 § 2: the returned plan always carries a terminal status, and
+        ``AgentError(code="PLAN_ABORTED")`` is raised *only* when a CRITICAL step
+        failed while ``config.execution.abort_on_critical_failure`` is true. The
+        status is written before the abort is raised so an interrupted inspection of
+        the plan object still shows ``FAILED``.
+        """
+        from agent_harness.config.schema import (
+            AgentError,
+            StepStatus,
+            TaskPriority,
+            derive_plan_status,
+        )
+
+        status, _ = derive_plan_status(plan)
+        plan.status = status
+        if status is not StepStatus.FAILED:
+            return
+        critical_failed = any(
+            step.status in (StepStatus.FAILED, StepStatus.SKIPPED)
+            and getattr(step, "priority", None) == TaskPriority.CRITICAL
+            for step in plan.steps
+        )
+        if critical_failed and getattr(
+            self.config.execution, "abort_on_critical_failure", True
+        ):
+            raise AgentError(
+                "PLAN_ABORTED",
+                "Critical step failed; aborting the plan",
+                "orchestrator",
+            )
 
     def _execute_step(self, step: Any, plan: Any, context: dict[str, Any]) -> None:
         """Run one step through tool resolution → execution → recording."""
@@ -79,6 +115,11 @@ class Orchestrator:
 
         try:
             tool_name = self._resolve_tool_name(step, plan)
+            if tool_name:
+                # SPEC-003 § 3 step 3: the resolved name is written back to the step,
+                # so metrics (SPEC-003 § 7 ``tools_used``), the report and the hooks
+                # all see which tool actually ran.
+                step.tool_name = tool_name
             tool = self.registry.get(tool_name) if tool_name else None
             if tool is None:
                 error = f"Tool not found: {tool_name or step.tool_hint}"
@@ -86,7 +127,7 @@ class Orchestrator:
                 return
 
             input_data = self._resolve_input(step, context)
-            if not tool.validate_input(input_data):
+            if not self._input_is_valid(tool, input_data):
                 error = f"Invalid input for {tool_name}"
                 self._mark_failed(step, error, context)
                 return
@@ -100,9 +141,7 @@ class Orchestrator:
                 step.status = StepStatus.SUCCESS
                 step.output_data = result.output
                 if self.hooks and self.hooks.on_step_complete:
-                    self._safe_hook(
-                        lambda: self.hooks.on_step_complete(step, result)
-                    )
+                    self._safe_hook(lambda: self.hooks.on_step_complete(step, result))
                 context.setdefault("step_results", {})[step.id] = {
                     "type": type(result.output).__name__,
                     "output": result.output,
@@ -125,6 +164,20 @@ class Orchestrator:
             raise
         except Exception as exc:
             self._mark_failed(step, str(exc), context)
+
+    @staticmethod
+    def _input_is_valid(tool: Any, input_data: dict[str, Any]) -> bool:
+        """Read ``BaseTool.validate_input``'s verdict, whichever shape it returns.
+
+        SPEC-002 § 1 freezes ``validate_input(input_data) -> tuple[bool, str]``. A
+        test double may return a bare boolean instead, so both shapes are accepted;
+        treating the tuple itself as truthy (always non-empty) would silently disable
+        the validation gate, which SPEC-003 § 3 step 6 requires.
+        """
+        verdict = tool.validate_input(input_data)
+        if isinstance(verdict, tuple):
+            return bool(verdict[0])
+        return bool(verdict)
 
     def _resolve_tool_name(self, step: Any, plan: Any) -> str | None:
         """Pick the tool: hint → tool_name → LLM selection."""
@@ -149,6 +202,7 @@ class Orchestrator:
         def substitute(value: Any) -> Any:
             if isinstance(value, str):
                 pattern = r"\{\{(step|var|config|prompt):([^}]+)\}\}"
+
                 def replacer(match: re.Match) -> str:
                     kind, ref = match.group(1), match.group(2)
                     if kind == "step":
@@ -156,10 +210,13 @@ class Orchestrator:
                         step_result = context.get("step_results", {}).get(step_id, {})
                         return str(step_result.get(field or "output", match.group(0)))
                     elif kind == "var":
-                        return str(context.get("variables", {}).get(ref, match.group(0)))
+                        return str(
+                            context.get("variables", {}).get(ref, match.group(0))
+                        )
                     elif kind == "prompt":
                         return str(context.get("original_prompt", match.group(0)))
                     return match.group(0)
+
                 return re.sub(pattern, replacer, value)
             elif isinstance(value, dict):
                 return {k: substitute(v) for k, v in value.items()}
@@ -178,13 +235,15 @@ class Orchestrator:
         if self.hooks and self.hooks.on_step_failed:
             self._safe_hook(lambda: self.hooks.on_step_failed(step, error))
         errors = context.setdefault("errors", [])
-        errors.append({
-            "step_id": step.id,
-            "attempt": 0,
-            "error": error,
-            "recovered": False,
-            "level": 4,
-        })
+        errors.append(
+            {
+                "step_id": step.id,
+                "attempt": 0,
+                "error": error,
+                "recovered": False,
+                "level": 4,
+            }
+        )
 
     def _attempt_recovery(
         self, step: Any, result: Any, context: dict[str, Any], error: str

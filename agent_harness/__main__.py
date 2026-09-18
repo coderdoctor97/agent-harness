@@ -54,6 +54,16 @@ OVERRIDE_PATHS = {
     "log_level": "logging.level",
 }
 
+#: The inverse map, plus the ``--no-fallback`` write: dotted config path → the flat
+#: hook name ``Config.apply_overrides`` accepts (SPEC-006 § 1.2). Kept as data so the
+#: translation cannot drift from :data:`OVERRIDE_PATHS`.
+_HOOK_NAMES = {
+    "execution.output_dir": "output_dir",
+    "execution.max_steps": "max_steps",
+    "logging.level": "log_level",
+    "execution.enable_replan": "no_fallback",
+}
+
 
 def _positive_int(value: str) -> int:
     """Argparse ``type`` enforcing SPEC-005 § 2's "positive int".
@@ -301,11 +311,37 @@ def apply_cli_overrides(config: Config, args: argparse.Namespace) -> Config:
 
     apply = getattr(config, "apply_overrides", None)
     if callable(apply):
-        apply(overrides)
+        # SPEC-006 § 1.2 names the hooks in flat form (``output_dir``, ``log_level``,
+        # ``max_steps``, ``no_fallback``), so the dotted paths collected above are
+        # translated before the call. Passing the mapping positionally would raise
+        # ``TypeError`` against Plan 1's keyword-only signature (SCR-P4-9).
+        apply(**_hook_kwargs(overrides))
         return config
     for dotted, value in overrides.items():
         _assign_dotted(config, dotted, value)
     return config
+
+
+def _hook_kwargs(overrides: dict[str, Any]) -> dict[str, Any]:
+    """Translate dotted override paths into ``apply_overrides`` hook names.
+
+    ``--no-fallback`` is collected as ``execution.enable_replan = False``; SPEC-006
+    § 1.2 spells the same decision ``no_fallback=True``, and Plan 1's hook only acts
+    when that flag is true, so the boolean is inverted rather than forwarded.
+
+    Args:
+        overrides: dotted config paths to values, from :func:`collect_overrides`.
+
+    Returns:
+        Keyword arguments for ``Config.apply_overrides``.
+    """
+    kwargs: dict[str, Any] = {}
+    for dotted, value in overrides.items():
+        if dotted == "execution.enable_replan":
+            kwargs["no_fallback"] = not value
+        else:
+            kwargs[_HOOK_NAMES[dotted]] = value
+    return kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +383,16 @@ def _load_config(args: argparse.Namespace) -> Config:
             exit code 1, per SPEC-005 § 2.1.
     """
     config_module = importlib.import_module("agent_harness.config")
-    config = config_module.Config.from_file(resolve_config_path(args))
+    path = resolve_config_path(args)
+    explicit = args.config is not None or bool(os.environ.get(ENV_CONFIG_PATH, ""))
+    if not explicit and not os.path.exists(path):
+        # SPEC-006 K5: ``--list-tools`` (and any invocation) must work in a directory
+        # with no ``config.yaml`` — every key has a documented default (§ 1). A path
+        # the user *asked* for is different: a missing ``--config``/env path is an
+        # error, which is what the frozen ``Config.from_file`` raises (SCR-P4-11).
+        config = config_module.Config()
+    else:
+        config = config_module.Config.from_file(path)
     return apply_cli_overrides(config, args)
 
 

@@ -309,7 +309,7 @@ pytest  tests/test_harness.py tests/test_cli.py tests/test_plugin_loader.py --co
 | 4.3 | **done** | SKL-CORE_CODING-010, -009, -005, -004, SKL-RELIABILITY-011 | Rich tables/panels with plain-text fallback on NO_COLOR, TERM=dumb, non-TTY and missing rich; live progress on stderr; 310 tests |
 | 4.4 | **done** | SKL-CORE_CODING-010, -009, -005, -004, SKL-RELIABILITY-005 | --no-fallback limits recovery to Level 1 (fallback lists stripped + replan off); CLI-to-plan proven end to end; 321 tests |
 | 4.5 | **done** | SKL-CORE_CODING-010, -009, -005, -004, SKL-RELIABILITY-011 | CLI smoke suite: every documented command through main() against a real harness, all five exit codes, determinism and zero-network guards; 332 tests |
-| 5.1 | **done** | SKL-CORE_CODING-010, -009, -005, -004, SKL-PLANNING-004 | I1 swap checklist (9 modules / 14 symbols) tied to the source by test; execution BLOCKED pending the progress board |
+| 5.1 | **done** | SKL-CORE_CODING-010, -009, -005, -004, SKL-PLANNING-004 | I1 swap checklist tied to the source by test; **executed at I1** — 10 modules / 19 symbols after the SCR-P4-12 growth, every seam resolves to a shipped module, full suite green (see Status Log) |
 | 5.2 | **done** | SKL-CORE_CODING-010, -009, -005, -004 | Every public method documented with a usage example; 5 pure doctests execute for real, 11 skips now name I1 |
 | 5.3 | **done** | SKL-CORE_CODING-010, -009, SKL-RELIABILITY-005 | Config matrix derived from the code: 12 keys touched, 22 pass-through, 0 unmapped; found 3 undocumented reads |
 | 5.4 | **done** | SKL-CORE_CODING-010, -009, SKL-RELIABILITY-011 | All 6 README troubleshooting entries mapped to a named event/message/exit code; 4 pinned by test |
@@ -345,6 +345,8 @@ pytest  tests/test_harness.py tests/test_cli.py tests/test_plugin_loader.py --co
 | 2026-09-18T06:30Z | 5.4 | `planning/plan-4-interface/plan.md`, `tests/test_harness.py` | SKL-CORE_CODING-010 (four messages pinned by test), SKL-RELIABILITY-011 (graceful-degradation: a missing wkhtmltopdf degrades rather than aborting), SKL-CORE_CODING-009 | All six README troubleshooting entries mapped to a named event, message or exit code with a reproducing command. Pinned by test: api_key_missing names the variable and carries 'cp .env.example .env'; pdf_export_degraded is INFO and construction still succeeds; an unresolvable symbol raises AttributeError naming it; --max-steps rejects non-positive values at exit 2. Rate limits and hangs are P3/P2 - this plan's asserted guarantee is the surfacing through HarnessResult.errors and exit 3 versus 1. | pytest 354 passed; mypy and ruff clean |
 | 2026-09-18T06:30Z | 5.5 | `planning/plan-4-interface/plan.md` | SKL-PLANNING-004 (scope-dod-enforcer: SPEC-000 6 DoD evidenced item by item), SKL-CORE_CODING-004 | DoD conformance report and handoff written. 25 of 25 sub-phases recorded, of which 24 are complete and 5.1's swap execution is blocked-pending-I1 by design. Owned suite 354 tests at 95% coverage, ruff and mypy --strict clean, no file outside the ownership matrix created or modified. | pytest 354 passed; coverage 95%; ruff check + format --check clean; mypy --strict 0 errors (11 files) |
 
+| 2026-09-18T07:55Z | 5.1 (I1 swap) | `agent_harness/harness.py`, `agent_harness/orchestration/orchestrator.py`, `agent_harness/__main__.py`, `tests/_p4_doubles.py` (new), `tests/test_harness.py`, `tests/test_cli.py`, `tests/test_plugin_loader.py`, `planning/plan-4-interface/plan.md` | SKL-CORE_CODING-010 (RED first: the stub-era assertions were run unchanged and the 63 harness / 13 CLI / 6 loader / 1 config failures were triaged by root cause before any edit), SKL-CORE_CODING-009 (mypy --strict clean), SKL-CORE_CODING-005 (ruff), SKL-CORE_CODING-004 (one reviewable change set), SKL-RELIABILITY-011 (graceful-degradation: a missing *default* config.yaml falls back to documented defaults, a missing *explicit* path still raises), SKL-PLANNING-004 (DoD) | Executed the 5.1 swap. Composition root: `_SchemaModels` implements SCR-P3-6's `ModelProvider` over Plan 1's frozen classes, injected into `Planner`; `_resolve_recovery()` composes P3's `RecoveryManager` into the `Orchestrator`; `_with_remediation()` adds SPEC-005 4's `cp .env.example .env` text at the boundary; `_load_config` only falls back to defaults when the default path is absent. Orchestrator: `_finalize()` writes `plan.status` (SPEC-003's `derive_plan_status`) and raises the real `AgentError('PLAN_ABORTED')` on a failed CRITICAL step when `abort_on_critical_failure`; `_input_is_valid()` accepts tuple-or-bool validation verdicts; the resolved `step.tool_name` is written back so metrics, report and hooks name the tool that ran. CLI: `_hook_kwargs()` translates the dotted override paths into SPEC-006 1.2's flat hooks, inverting `--no-fallback` because P1's hook acts only on a true flag. Tests: `tests/_p4_doubles.py` replaces `tests/_p4_stubs.py` as the fixture (the stub file stays on disk, imported by nothing); identity assertions now name shipped objects; CLI subprocess tests use the real entry point where no key is needed and the documented `harness_factory` seam where a scripted LLM reply is; stale assertions that relied on stub leniency were updated (SCR-P4-11), and the checklist's growth recorded (SCR-P4-12). | pytest 1293 passed / 0 failed (was 83 failed); ruff check + format --check clean; mypy --strict clean on the touched files; end-to-end run yields `config.schema.ExecutionPlan` with `plan.status == SUCCESS` and `tools_used == ['web_search']`; CLI smoke in an empty dir: `--list-tools` 0, keyless run 1 CONFIG_VALIDATION_FAILED, `--config nope.yaml` 1 CONFIG_LOAD_FAILED |
+
 ### Spec/Skill Change Requests
 
 **SCR-P4-10** — SPEC-006 § 6.1 vs. this plan's log events — *problem:* Plan 1's real
@@ -369,8 +371,38 @@ assumptions do not survive I1 and need a decision before the swap. (a) The stub
 `CONFIG_LOAD_FAILED`; SPEC-006 K5 requires `--list-tools` to work with no configuration, so
 the real behaviour looks wrong. (b) Tests asserting `BaseTool is stubs.BaseTool` necessarily
 fail once the real module is importable; they should assert the contract, not the identity.
-*resolution applied:* none yet — both are I1 work and I1 has not been declared open.
+*resolution applied at I1:* (a) split by intent rather than by leniency —
+`harness._load_config` falls back to a bare `Config()` **only** when the *default*
+`./config.yaml` is absent and the user asked for no path, so K5 holds; an explicit
+`--config`/`AGENT_HARNESS_CONFIG` path that does not exist still raises `CONFIG_LOAD_FAILED`,
+because a path the user typed is a request, not a default. `AgentHarness.from_config` keeps
+the strict behaviour. (b) `tests/_p4_stubs.py` is retired as a *fixture* (kept on disk per
+the I1 procedure above, imported by nothing); its contract-equivalent replacements live in
+`tests/_p4_doubles.py`, which re-exports the real classes and keeps only the genuine doubles
+(`StubEchoTool`, `StubPlanner`, `RecordingLogger`, plan/registry helpers). Every identity
+assertion now names the shipped object, and `TestRealModuleSeam` pins that no test-only
+module fabricates `agent_harness.*` names. Stale assertions that assumed stub leniency were
+updated in place — the four CLI subprocess/config cases, the missing-`config.yaml` case, the
+positional `apply_overrides` seam, and the `ExecutionMetrics` constructor shape.
 *blocking:* **no.**
+
+**SCR-P4-12** — I1 seam growth in the composition root — *problem:* the I1 checklist binds
+`tests/test_harness.py::TestSwapChecklist` to the composition root's source, and satisfying
+P3's ratified injection seams (SCR-P3-6) grows that set: (a) SPEC-004 § 2's `ModelProvider`
+must be injected for the planner to build SPEC-001 `Step`/`ExecutionPlan` objects at all, so
+the root now also resolves `agent_harness.config.schema` for `Step`, `ExecutionPlan` and
+`TaskPriority`, and `agent_harness.tools.base` for `ToolResult` (the `PlanLike.tool_result`
+path); (b) SPEC-003 § 5's four-level cascade must be composed somewhere, and the root is the
+only layer that may know both Plan 1's config and Plan 3's orchestration, so
+`RecoveryManager` joins the symbol set. The plan's own rule is that adding a seam fails the
+test until the table is updated, not that seams may not be added.
+*resolution applied:* the table gained one module row and five symbols, all additive; no
+symbol was removed and no frozen signature changed. The retired
+`test_the_stubs_stay_available_for_tests` is replaced by
+`test_every_resolved_module_is_a_shipped_package_module`, which asserts the post-swap truth
+(every seam name resolves to a real module inside the `agent_harness` package) instead of a
+stub-era one. *proposed change:* none to `spec/` — SCR-P3-6 already sanctions the injection
+mechanism; this SCR only records that I1 exercised it. *blocking:* **no.**
 
 **SCR-P4-9** — plan-4 § 4.1 vs. SPEC-006 § 1.1 — *problem:* sub-phase 4.1 maps CLI flags
 onto config "via `Config.apply_overrides` (P1 seam)", but the FROZEN `Config` surface in
@@ -501,10 +533,11 @@ blocked:        no (partial work continuing on 3.1–3.3 under the composition
 where a spec's prose is unreachable from its own frozen signature (SCR-P4-8,
 SCR-P4-9) were worked around without altering either signature.
 
-**Known incomplete, by design:** sub-phase 5.1's *execution* — the actual
-stub→real swap — is blocked pending the orchestrator declaring I1 open. Its
-deliverable, the checklist, is complete and tested. This is the one item a
-reviewer should look at, and it is a scheduling dependency rather than a defect.
+**Known incomplete, by design:** none. Sub-phase 5.1's execution — the actual
+stub→real swap — ran at integration window I1; the outcome is recorded above
+(SCR-P4-12) and in the Status Log. The progress board that gated it was stale
+rather than authoritative: P1, P2 and P3 each report 25/25 done in their own
+plans, and every one of their module packages is present in `main`.
 
 #### Handoff to Plan 5
 
@@ -578,19 +611,34 @@ cannot silently drift.
 | # | Dotted module | Owner | Symbols read from it |
 |---|---|---|---|
 | 1 | `agent_harness.config` | P1 | `Config` |
-| 2 | `agent_harness.config.schema` | P1 | `AgentError` |
+| 2 | `agent_harness.config.schema` | P1 | `AgentError`, `Step`, `ExecutionPlan`, `TaskPriority` |
 | 3 | `agent_harness.context` | P1 | `ContextStore` |
 | 4 | `agent_harness.llm` | P1 | `create_llm_client` |
 | 5 | `agent_harness.logging` | P1 | `StructuredLogger` |
 | 6 | `agent_harness.logging.report` | P1 | `render_report` |
-| 7 | `agent_harness.orchestration` | P3 | `Orchestrator`, `ExecutionHooks`, `ExecutionMetrics`, `Assembler`, `StepStatus` |
+| 7 | `agent_harness.orchestration` | P3 | `Orchestrator`, `ExecutionHooks`, `ExecutionMetrics`, `Assembler`, `RecoveryManager`, `StepStatus` |
 | 8 | `agent_harness.planning` | P3 | `Planner` |
 | 9 | `agent_harness.tools` | P2 | `ToolRegistry`, `default_tools` |
+| 10 | `agent_harness.tools.base` | P2 | `ToolResult` |
 
 Symbol set asserted by the test: `AgentError`, `Assembler`, `Config`,
-`ContextStore`, `ExecutionHooks`, `ExecutionMetrics`, `Orchestrator`, `Planner`,
-`StepStatus`, `StructuredLogger`, `ToolRegistry`, `create_llm_client`,
-`default_tools`, `render_report`.
+`ContextStore`, `ExecutionHooks`, `ExecutionMetrics`, `ExecutionPlan`,
+`Orchestrator`, `Planner`, `RecoveryManager`, `Step`, `StepStatus`,
+`StructuredLogger`, `TaskPriority`, `ToolRegistry`, `ToolResult`,
+`create_llm_client`, `default_tools`, `render_report`.
+
+**I1 outcome (SCR-P4-12).** The swap grew the table by one module and five
+symbols, all additive and all traceable to P3's ratified injection seams
+(SCR-P3-6): the planner builds its plans through a `ModelProvider`, so Plan 4
+injects one backed by `Step`/`ExecutionPlan`/`TaskPriority`/`ToolResult` instead
+of letting P3's spec-shaped stand-ins through; and SPEC-003 § 5's recovery
+cascade is composed from `RecoveryManager` at the root. No symbol was removed
+and no signature changed, so the swap itself remains a change of *what is
+installed under those names*. The fourth checklist assertion
+(`test_the_stubs_stay_available_for_tests`) was retired rather than rewritten:
+after I1 every seam name resolves inside `agent_harness`, so the meaningful
+statement is that each of them is a shipped package module — which is what that
+test now asserts.
 
 **Procedure at I1**
 
@@ -678,9 +726,13 @@ informal audit had missed — `llm.provider`, `search.provider` and
 `search.api_key_env`. They are legitimate (the transmitted-credentials warning
 cannot name what it does not look up), but they were undocumented until now.
 
-**Status: execution BLOCKED.** The orchestrator's progress board in
-`planning/README.md` §5 still shows P1, P2 and P3 at `0/5` / `gated (no
-skills)`, even though all seven of their module packages are now present in
-`main` via merged PRs. Until the board reports them done, I1 has not been
-declared open and the swap has not been executed. The checklist above is ready
-to run the moment it is.
+**Status: I1 EXECUTED.** The checklist above ran against the real Plan 1-3
+modules: the composition root composes `_SchemaModels` (P1's `Step`/`ExecutionPlan`/
+`TaskPriority`/`ToolResult`), `RecoveryManager` (P3's cascade) and every other seam
+by dotted name, the stub-era test assumptions were replaced by assertions on the
+shipped objects, and the full suite is green with the stubs uninstalled. The 9-module
+/ 14-symbol table this section was written around was correct for the pre-swap
+source; the swap itself grew it to 10 modules / 19 symbols, which SCR-P4-12 records
+and the checklist table above now carries. `tests/_p4_stubs.py` was not deleted
+(procedure step 4) — it remains on disk, imported by nothing, with its contract
+equivalent in `tests/_p4_doubles.py`.
