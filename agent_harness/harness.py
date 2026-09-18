@@ -93,9 +93,9 @@ class AgentHarness:
 
     Example:
         >>> from agent_harness import AgentHarness, Config
-        >>> config = Config.from_file("./config.yaml")   # doctest: +SKIP
-        >>> harness = AgentHarness(config)               # doctest: +SKIP
-        >>> result = harness.run("Research X and summarise")   # doctest: +SKIP
+        >>> config = Config.from_file("./config.yaml")   # doctest: +SKIP (needs I1)
+        >>> harness = AgentHarness(config)               # doctest: +SKIP (needs I1)
+        >>> result = harness.run("Research X")   # doctest: +SKIP (needs I1)
 
     Args:
         config: typed configuration (SPEC-006 § 1).
@@ -129,7 +129,15 @@ class AgentHarness:
         clock: Callable[[], float] = time.monotonic,
         progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
-        """Store the config and seams, and create the working directories."""
+        """Store the config and seams, and create the working directories.
+
+        Every argument after ``config`` is a test seam. Production code passes
+        only the config and lets the harness resolve its collaborators.
+
+        Example:
+            >>> harness = AgentHarness(Config())          # doctest: +SKIP (needs I1)
+            >>> harness.list_tools()                      # doctest: +SKIP (needs I1)
+        """
         self.config = config
         self._llm_client = llm_client
         self._planner = planner
@@ -162,7 +170,7 @@ class AgentHarness:
             A configured :class:`AgentHarness`.
 
         Example:
-            >>> harness = AgentHarness.from_config("./config.yaml")  # doctest: +SKIP
+            >>> harness = AgentHarness.from_config()  # doctest: +SKIP (needs I1)
         """
         config_module = importlib.import_module("agent_harness.config")
         return cls(config_module.Config.from_file(path))
@@ -597,8 +605,8 @@ class AgentHarness:
                 error raised while building the client, registry or plan.
 
         Example:
-            >>> plan = harness.plan("Build a REST API")   # doctest: +SKIP
-            >>> [step.tool_hint for step in plan.steps]   # doctest: +SKIP
+            >>> plan = harness.plan("Build a REST API")   # doctest: +SKIP (needs I1)
+            >>> [step.tool_hint for step in plan.steps]   # doctest: +SKIP (needs I1)
         """
         self._validate_prompt(prompt)
         registry = self._resolve_registry()
@@ -637,8 +645,8 @@ class AgentHarness:
                 planning).
 
         Example:
-            >>> result = harness.run("Research AI safety")   # doctest: +SKIP
-            >>> result.status                                # doctest: +SKIP
+            >>> result = harness.run("Research AI safety")   # doctest: +SKIP (needs I1)
+            >>> result.status                                # doctest: +SKIP (needs I1)
         """
         run_context = self._prepare_run(prompt, context)  # steps 1-4
         run_context["output_format"] = output_format
@@ -697,6 +705,13 @@ class AgentHarness:
         Args:
             callback: receives one event dict per orchestrator event, or
                 ``None`` to stop progress reporting.
+
+        Example:
+            >>> events = []                               # doctest: +SKIP (needs I1)
+            >>> harness.set_progress(events.append)       # doctest: +SKIP (needs I1)
+            >>> harness.run("Summarise the report")       # doctest: +SKIP (needs I1)
+            >>> events[0]["event"]                        # doctest: +SKIP (needs I1)
+            'plan_start'
         """
         self._progress = callback
 
@@ -715,8 +730,8 @@ class AgentHarness:
                 own G1 guard, passed straight through rather than re-implemented.
 
         Example:
-            >>> db = DatabaseQueryTool(db_path="app.db")   # doctest: +SKIP
-            >>> harness.register_tool(db)                  # doctest: +SKIP
+            >>> db = DatabaseQueryTool(db_path="app.db")   # doctest: +SKIP (needs I1)
+            >>> harness.register_tool(db)                  # doctest: +SKIP (needs I1)
         """
         self._resolve_registry().register(tool)
 
@@ -728,7 +743,7 @@ class AgentHarness:
             the registry's deterministic order (SPEC-002 G3).
 
         Example:
-            >>> for tool in harness.list_tools():   # doctest: +SKIP
+            >>> for tool in harness.list_tools():   # doctest: +SKIP (needs I1)
             ...     print(tool["name"])
         """
         descriptors: list[dict[str, Any]] = self._resolve_registry().list_tools()
@@ -881,8 +896,14 @@ class AgentHarness:
         """Tear down every registered tool (SPEC-002 R8).
 
         Idempotent: a second call does nothing. A tool whose ``cleanup()`` raises
-        is logged and skipped, so one bad teardown cannot prevent the others —
+        is logged and skipped, so one bad teardown cannot prevent the others -
         and the failure is never silenced.
+
+        Example:
+            >>> harness = AgentHarness.from_config()   # doctest: +SKIP (needs I1)
+            >>> harness.run("Summarise the report")    # doctest: +SKIP (needs I1)
+            >>> harness.close()                        # doctest: +SKIP (needs I1)
+            >>> harness.close()   # safe to call twice # doctest: +SKIP (needs I1)
         """
         if self._closed:
             return
@@ -905,7 +926,17 @@ class AgentHarness:
                 )
 
     def __enter__(self) -> AgentHarness:
-        """Enter the context manager."""
+        """Enter the context manager.
+
+        Preferred over a manual :meth:`close`, because teardown then happens even
+        when the block raises.
+
+        Example:
+            >>> with AgentHarness.from_config() as h:  # doctest: +SKIP (needs I1)
+            ...     result = h.run("Summarise the report")
+            >>> result.status                        # doctest: +SKIP (needs I1)
+            'completed'
+        """
         return self
 
     def __exit__(
@@ -916,7 +947,15 @@ class AgentHarness:
     ) -> None:
         """Exit the context manager, closing the harness.
 
-        Returns ``None`` so that any in-flight exception continues to propagate.
+        Returns ``None`` so that any in-flight exception continues to propagate:
+        a harness must never swallow the caller's error while tidying up.
+
+        Example:
+            >>> with AgentHarness.from_config() as h:  # doctest: +SKIP (needs I1)
+            ...     raise RuntimeError("caller error")
+            Traceback (most recent call last):
+                ...
+            RuntimeError: caller error
         """
         self.close()
 

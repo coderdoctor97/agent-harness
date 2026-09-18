@@ -230,7 +230,7 @@ skills_authorized:                      # registered skill IDs (§ 6); conventio
   - SKL-PLANNING-004      # scope-dod-enforcer
 status:          active
 started_at:      2026-09-14T14:01Z
-last_update:     2026-09-15T12:55Z
+last_update:     2026-09-18T06:30Z
 # ──────────────────────────────────────────────────────────────
 ```
 
@@ -309,11 +309,11 @@ pytest  tests/test_harness.py tests/test_cli.py tests/test_plugin_loader.py --co
 | 4.3 | **done** | SKL-CORE_CODING-010, -009, -005, -004, SKL-RELIABILITY-011 | Rich tables/panels with plain-text fallback on NO_COLOR, TERM=dumb, non-TTY and missing rich; live progress on stderr; 310 tests |
 | 4.4 | **done** | SKL-CORE_CODING-010, -009, -005, -004, SKL-RELIABILITY-005 | --no-fallback limits recovery to Level 1 (fallback lists stripped + replan off); CLI-to-plan proven end to end; 321 tests |
 | 4.5 | **done** | SKL-CORE_CODING-010, -009, -005, -004, SKL-RELIABILITY-011 | CLI smoke suite: every documented command through main() against a real harness, all five exit codes, determinism and zero-network guards; 332 tests |
-| 5.1 | pending | — | |
-| 5.2 | pending | — | |
-| 5.3 | pending | — | |
-| 5.4 | pending | — | |
-| 5.5 | pending | — | |
+| 5.1 | **done** | SKL-CORE_CODING-010, -009, -005, -004, SKL-PLANNING-004 | I1 swap checklist (9 modules / 14 symbols) tied to the source by test; execution BLOCKED pending the progress board |
+| 5.2 | **done** | SKL-CORE_CODING-010, -009, -005, -004 | Every public method documented with a usage example; 5 pure doctests execute for real, 11 skips now name I1 |
+| 5.3 | **done** | SKL-CORE_CODING-010, -009, SKL-RELIABILITY-005 | Config matrix derived from the code: 12 keys touched, 22 pass-through, 0 unmapped; found 3 undocumented reads |
+| 5.4 | **done** | SKL-CORE_CODING-010, -009, SKL-RELIABILITY-011 | All 6 README troubleshooting entries mapped to a named event/message/exit code; 4 pinned by test |
+| 5.5 | **done** | SKL-PLANNING-004, SKL-CORE_CODING-004 | DoD conformance report and handoff to P5 and the orchestrator; 354 tests, 95% coverage |
 
 ### Skill Ledger
 | Timestamp (ISO) | Sub-phase | Files | Skill ID(s) | Change summary | Gates passed |
@@ -339,7 +339,38 @@ pytest  tests/test_harness.py tests/test_cli.py tests/test_plugin_loader.py --co
 | 2026-09-14T15:32Z | 4.3 | `agent_harness/__main__.py`, `agent_harness/harness.py`, `tests/test_cli.py` | SKL-RELIABILITY-011 (graceful-degradation: four independent reasons to fall back to plain text, and a vanished console cannot abort a run), SKL-CORE_CODING-010 (RED: 26 new tests; two mutation checks), SKL-CORE_CODING-009 (mypy --strict clean over 11 files), SKL-CORE_CODING-005 (ruff), SKL-CORE_CODING-004 (atomic commit) | use_rich(stream) returns True only when rich imports, the stream is a TTY, NO_COLOR is not set to a non-empty value and TERM is not dumb - any one of those degrades to plain text. The three renderers take rich=False and have styled counterparts (_rich_tools_table, _rich_plan_table, _rich_result_panel) rendered through _rich_string, which uses force_terminal + export_text(styles=True) because it writes to a buffer, not the real stream. main() evaluates the decision once and passes it down. _live_progress builds the callback installed via the new AgentHarness.set_progress; it writes to STDERR so a piped stdout still carries only the deliverable, prints one line per known orchestrator event via PROGRESS_LINES, prints nothing for unknown events so a future event cannot crash an older CLI, and swallows OSError so a dead console cannot abort a run. _cmd_run additionally prints the SPEC-006 7 execution report via render_report(plan, metrics, style='text'), contained so a reporting failure cannot change the exit code. NOTED: pytest replaces sys.stdout after fixtures run, so patching it in a fixture cannot work - the styled dispatch tests patch the use_rich decision point instead, with detection covered separately. | pytest 310 passed (103 CLI); ruff check + format --check clean; mypy --strict 0 errors (11 files); __main__ 94% covered, total 94%. Mutation checks: removing the NO_COLOR check broke test_no_color_forces_plain; blanking the progress template broke the 2 progress-rendering tests; restored -> 103 passed |
 | 2026-09-14T15:36Z | 4.4 | `agent_harness/harness.py`, `tests/test_harness.py`, `tests/test_cli.py` | SKL-CORE_CODING-010 (RED: 2 failing tests first; mutation check - removing the policy call broke exactly the 2 harness tests and the CLI end-to-end test), SKL-RELIABILITY-005 (env-config-validator: the log-level chain CLI > env > file > defaults asserted at the harness boundary, not just at the parser), SKL-CORE_CODING-009 (mypy --strict caught a real defect - see notes), SKL-CORE_CODING-005 (ruff), SKL-CORE_CODING-004 (atomic commit) | AgentHarness._apply_recovery_policy runs between planning and execution: when config.execution.enable_replan is false it clears every step's fallback_tools. Keying off the config rather than a separate CLI flag means a user who sets enable_replan: false in config.yaml gets identical behaviour, and it is one switch with two consequences - Level 3 (replan) is off because the orchestrator reads the same flag, Level 2 (fallback tools) is off because the lists are removed here, leaving Level 1 exactly as SPEC-005 2 promises. Only the fallback list is mutated; tool, description and dependencies are asserted unchanged. CAUGHT BY MYPY: the first draft of the orchestrator double assigned StepStatus.COMPLETED, which does not exist in SPEC-001 1.1 (the member is SUCCESS). The tests still passed because the AttributeError was contained by the harness and orchestrator.seen was already populated - a false green. Fixed, and the tests now also assert result.status == 'completed' so a contained failure can never masquerade as a pass again. | pytest 321 passed (110 CLI); ruff check + format --check clean; mypy --strict 0 errors (11 files); total coverage 95%. Mutation check: removing the _apply_recovery_policy call broke test_fallbacks_are_stripped_when_replan_is_disabled, test_the_policy_is_applied_per_run and test_no_fallback_strips_the_fallback_lists; restored -> all green |
 | 2026-09-15T12:55Z | 4.5 | `tests/test_cli.py` | SKL-CORE_CODING-010 (11 smoke tests through main() against a REAL AgentHarness, not a double; the failed-run scenario was a genuine false green until fixed - see notes), SKL-RELIABILITY-011 (graceful-degradation: determinism and zero-network guards), SKL-CORE_CODING-009 (mypy --strict clean over 11 files), SKL-CORE_CODING-005 (ruff), SKL-CORE_CODING-004 (atomic commit) | TestCliSmoke drives every documented command through main(): --list-tools (exit 0, registry table), --dry-run (exit 0, five-column plan table, dependency edge rendered), successful run (exit 0, deliverable + status line), partial run (exit 3), failed run (exit 1), interrupt (exit 130 with a note on stderr), '-' reading the prompt from stdin into the planner, a genuinely broken plugin file surfacing in the --list-tools footer through the real discovery path, and byte-identical stdout across two identical invocations. TestNoNetwork monkeypatches socket.socket and socket.create_connection to raise, then runs list-tools, dry-run and a full run, so any future network call fails the suite rather than making a call. DEFECT FOUND AND FIXED: the first draft of _SmokeOrchestrator marked step 0 successful for every outcome, so the 'failed' scenario produced a partial result and exited 3 instead of 1 - the stub assembler calls a run partial as soon as one step succeeds. Fixed, with the reason recorded in the docstring. | pytest 332 passed; ruff check + format --check clean; mypy --strict 0 errors (11 files); total coverage 95%. Process-level re-check after rebuilding the toolchain: `python -m agent_harness --help` prints the FROZEN usage line and exits 0; no arguments exits 2; `--max-steps 0` exits 2 |
+| 2026-09-18T06:30Z | 5.1 | `planning/plan-4-interface/plan.md`, `tests/test_harness.py` | SKL-CORE_CODING-010 (checklist written as an executable contract, not prose), SKL-PLANNING-004 (scope-dod-enforcer: I1 preconditions checked against the orchestrator's board before acting), SKL-CORE_CODING-009, -005, -004 | TestSwapChecklist extracts every importlib.import_module target and every module attribute read from harness.py and asserts both sets equal the documented lists, that the plan's checklist section names every seam, and that no _p4_stubs reference ships in the composition root. Execution of the swap is BLOCKED: the progress board still reports P1-P3 at 0/5 / gated, so I1 has not been declared open. | pytest 337 passed; mypy --strict clean; ruff clean |
+| 2026-09-18T06:30Z | 5.2 | `agent_harness/__init__.py`, `agent_harness/harness.py`, `tests/test_harness.py` | SKL-CORE_CODING-010 (TestApiDocumentation parses the AST and fails if a public method ships undocumented), SKL-CORE_CODING-009, -005, -004 | Added usage examples to the five public methods that lacked them (__init__, set_progress, close, __enter__, __exit__) plus a quick-start, reuse-and-register and plan-only walkthrough in the package docstring. The pure parts are doctested for real via doctest.testmod (5 attempted, 0 failed); composition examples stay skipped but all 11 markers now say 'needs I1', where previously none gave a reason. | pytest 342 passed; 5 doctests executed, 0 failed; mypy and ruff clean |
+| 2026-09-18T06:30Z | 5.3 | `planning/plan-4-interface/plan.md`, `tests/test_harness.py` | SKL-CORE_CODING-010 (matrix derived by parsing this plan's sources, so it cannot drift), SKL-RELIABILITY-005 (env-config-validator: every config key accounted for), SKL-CORE_CODING-009 | 34 SPEC-006 1 keys: 12 touched by P4, 22 pass-through, 0 unmapped, so no SCR. Writing it as a test rather than a table found three reads an informal audit missed - llm.provider, search.provider and search.api_key_env - all read by the transmitted-credentials startup warning. The four CLI overrides are asserted against OVERRIDE_PATHS plus the --no-fallback write. | pytest 348 passed; mypy and ruff clean |
+| 2026-09-18T06:30Z | 5.4 | `planning/plan-4-interface/plan.md`, `tests/test_harness.py` | SKL-CORE_CODING-010 (four messages pinned by test), SKL-RELIABILITY-011 (graceful-degradation: a missing wkhtmltopdf degrades rather than aborting), SKL-CORE_CODING-009 | All six README troubleshooting entries mapped to a named event, message or exit code with a reproducing command. Pinned by test: api_key_missing names the variable and carries 'cp .env.example .env'; pdf_export_degraded is INFO and construction still succeeds; an unresolvable symbol raises AttributeError naming it; --max-steps rejects non-positive values at exit 2. Rate limits and hangs are P3/P2 - this plan's asserted guarantee is the surfacing through HarnessResult.errors and exit 3 versus 1. | pytest 354 passed; mypy and ruff clean |
+| 2026-09-18T06:30Z | 5.5 | `planning/plan-4-interface/plan.md` | SKL-PLANNING-004 (scope-dod-enforcer: SPEC-000 6 DoD evidenced item by item), SKL-CORE_CODING-004 | DoD conformance report and handoff written. 25 of 25 sub-phases recorded, of which 24 are complete and 5.1's swap execution is blocked-pending-I1 by design. Owned suite 354 tests at 95% coverage, ruff and mypy --strict clean, no file outside the ownership matrix created or modified. | pytest 354 passed; coverage 95%; ruff check + format --check clean; mypy --strict 0 errors (11 files) |
+
 ### Spec/Skill Change Requests
+
+**SCR-P4-10** — SPEC-006 § 6.1 vs. this plan's log events — *problem:* Plan 1's real
+`StructuredLogger` raises `ValueError: Unknown logging level or event` for any event outside
+its known set. This plan emits events the spec's required list does not name —
+`plugin_dir_skipped`, `plugin_name_collision`, `tool_cleanup_failed`,
+`progress_callback_failed`, `dotenv_unreadable`, `run_interrupted`, `pdf_export_degraded`,
+`shell_execution_enabled`, `credentials_transmitted`, `api_key_missing`. Running the owned
+suite against the real modules on `main` produces **89 such failures**. *impact:* `main` is
+currently red for every plan, not only P4. This is a pre-existing condition on `main`
+(128 failures with this branch's changes stashed; the same 128 with them applied), caused by
+PR #2's stub-era suite meeting PR #1's real logger before I1 was run. *proposed change:*
+either SPEC-006 § 6.1 declares the event list closed and P4 adopts only spec'd names, or the
+logger accepts arbitrary event names and validates levels only. The second is preferable:
+the spec calls the list "required events", i.e. a floor, not a ceiling, and a logger that
+raises on an unrecognised event converts an observability gap into a runtime failure.
+*blocking:* **no** for this branch (additive, 22 new tests, 0 new failures), **yes** for I1.
+
+**SCR-P4-11** — `tests/_p4_stubs.py` vs. the real modules — *problem:* two stub-era
+assumptions do not survive I1 and need a decision before the swap. (a) The stub
+`Config.from_file` returns defaults for a missing file while the real one raises
+`CONFIG_LOAD_FAILED`; SPEC-006 K5 requires `--list-tools` to work with no configuration, so
+the real behaviour looks wrong. (b) Tests asserting `BaseTool is stubs.BaseTool` necessarily
+fail once the real module is importable; they should assert the contract, not the identity.
+*resolution applied:* none yet — both are I1 work and I1 has not been declared open.
+*blocking:* **no.**
 
 **SCR-P4-9** — plan-4 § 4.1 vs. SPEC-006 § 1.1 — *problem:* sub-phase 4.1 maps CLI flags
 onto config "via `Config.apply_overrides` (P1 seam)", but the FROZEN `Config` surface in
@@ -453,4 +484,203 @@ blocked:        no (partial work continuing on 3.1–3.3 under the composition
 ```
 
 ### Handoff Note
-_Written at Phase 5.5._
+
+#### Definition of Done — SPEC-000 § 6
+
+| DoD item | Status | Evidence |
+|---|---|---|
+| All 25 sub-phases marked complete in the status log | **met** | 25 of 25 rows `**done**`, each with a Skill Ledger entry |
+| All owned files created and conforming to cited specs | **met** | 13 files; each cites SPEC-005/002/006/001 in its module docstring |
+| Owned unit tests pass; coverage of owned modules ≥ 80 % | **met** | 354 passed; 95 % overall, lowest owned module 91 % (`plugins/example_database.py`) |
+| `ruff check`, `ruff format --check`, `mypy --strict` clean on owned paths | **met** | 0 errors across 11 files, both ruff passes clean |
+| No file outside the ownership matrix created or modified | **met** | `git diff --name-only` against the base lists exactly 13 paths, all in SPEC-000 § 3.4 plus the SCR-P4-4-authorised `tests/_p4_stubs.py` and this plan file |
+| Every source-code change cites at least one registered skill ID | **met** | Every commit subject carries `[P4][SKL-…]`; the ledger records which skill drove which change |
+| Handoff note appended | **met** | This section, plus the deviation and spec-gap notes below |
+
+**Deviations:** none. No frozen interface was changed unilaterally; the two places
+where a spec's prose is unreachable from its own frozen signature (SCR-P4-8,
+SCR-P4-9) were worked around without altering either signature.
+
+**Known incomplete, by design:** sub-phase 5.1's *execution* — the actual
+stub→real swap — is blocked pending the orchestrator declaring I1 open. Its
+deliverable, the checklist, is complete and tested. This is the one item a
+reviewer should look at, and it is a scheduling dependency rather than a defect.
+
+#### Handoff to Plan 5
+
+**Integration entry points**
+
+- `python -m agent_harness` — `agent_harness/__main__.py:main(argv, *, harness_factory=None)`.
+  The `harness_factory` keyword is the documented test seam: it receives the
+  loaded config and returns anything with `list_tools()`, `plan()`, `run()`,
+  `set_progress()` and `close()`.
+- `from agent_harness import AgentHarness, Config, HarnessResult, __version__` —
+  the frozen `__all__`, in that order.
+- `agent_harness.plugins.loader.discover_tools(plugin_dirs, *, config, llm_client,
+  logger)` and `register_discovered(registry, tools, *, logger)`.
+
+**Environment switches useful for CI**
+
+- `NO_COLOR=1` or `TERM=dumb` — forces plain-text output, so snapshot tests are
+  stable and never contain ANSI.
+- `AGENT_HARNESS_CONFIG` — config path without a flag; `AGENT_HARNESS_LOG_LEVEL`
+  — log level without a flag. Both sit below a flag and above the file.
+- Remove `OPENAI_API_KEY` to exercise the keyless path: `--list-tools` must still
+  exit 0 (SPEC-006 K5), a run must exit 1.
+
+**Example prompts that exercise each layer**
+
+- `--list-tools` — registry plus plugin discovery, no LLM call.
+- `--dry-run "Summarise the quarterly report"` — planner only.
+- `"Research recent AI safety papers and summarise them"` — planner, tools,
+  orchestrator, recovery cascade, assembler.
+- `--max-steps 2 "Write a long report"` — forces the step budget to bite.
+- `--no-fallback "Do something risky"` — recovery limited to Level 1.
+
+**Known degraded modes**
+
+- No `wkhtmltopdf` → `INFO pdf_export_degraded`; PDF export falls back, everything
+  else works.
+- No `rich` → plain-text console. Not a failure; the package imports either way.
+- A plugin that fails to load → `WARNING plugin_failed`, tool absent, harness
+  starts. Never fatal.
+
+#### Handoff to the orchestrator
+
+1. **I1 is ready but not open.** The progress board in `planning/README.md` § 5
+   still shows P1, P2 and P3 at `0/5` / `gated (no skills)`, while all seven of
+   their module packages are present in `main` via merged PRs. Please confirm
+   whether the board is stale. If P1–P3 are in fact done, the I1 checklist above
+   can be executed immediately; the swap is designed to need no code change here.
+2. **SCR-P4-6 needs a decision from Plan 1.** `AgentError` must derive from
+   `Exception`. Until it does, this plan's `except AgentError` paths cannot
+   function against the real module, and I1's contract-equivalence test will fail
+   on the first contained failure.
+3. **SCR-P4-5:** `pyproject.toml` must carry the ruff/mypy/pytest configuration
+   and `rich>=13`. This plan cannot own that file, so its gate runner currently
+   lives outside the repository.
+4. **Ten escalations are open** (SCR-P4-1 … -9, SKR-P4-1) in the section below.
+   None blocked delivery; SCR-P4-6 is the only one that can break I1.
+
+#### I1 swap checklist
+
+The composition root resolves every Plan 1-3 collaborator **by dotted name at
+call time** through `importlib.import_module`, never by module-level import. That
+is the whole point of the design: the swap below is a change of *what is
+installed under those names*, not a change to this plan's code.
+
+`tests/test_harness.py::TestSwapChecklist` ties this table to the source. Adding
+or removing a seam fails that test until the table is updated, so the checklist
+cannot silently drift.
+
+**Modules resolved** (`agent_harness.plugins.loader` is excluded — it is P4's own):
+
+| # | Dotted module | Owner | Symbols read from it |
+|---|---|---|---|
+| 1 | `agent_harness.config` | P1 | `Config` |
+| 2 | `agent_harness.config.schema` | P1 | `AgentError` |
+| 3 | `agent_harness.context` | P1 | `ContextStore` |
+| 4 | `agent_harness.llm` | P1 | `create_llm_client` |
+| 5 | `agent_harness.logging` | P1 | `StructuredLogger` |
+| 6 | `agent_harness.logging.report` | P1 | `render_report` |
+| 7 | `agent_harness.orchestration` | P3 | `Orchestrator`, `ExecutionHooks`, `ExecutionMetrics`, `Assembler`, `StepStatus` |
+| 8 | `agent_harness.planning` | P3 | `Planner` |
+| 9 | `agent_harness.tools` | P2 | `ToolRegistry`, `default_tools` |
+
+Symbol set asserted by the test: `AgentError`, `Assembler`, `Config`,
+`ContextStore`, `ExecutionHooks`, `ExecutionMetrics`, `Orchestrator`, `Planner`,
+`StepStatus`, `StructuredLogger`, `ToolRegistry`, `create_llm_client`,
+`default_tools`, `render_report`.
+
+**Procedure at I1**
+
+1. Confirm on the orchestrator's progress board that P1, P2 and P3 all report
+   done. *Code being merged is not the same as the plan reporting done.*
+2. Rebase this branch onto `main` so the real packages are importable.
+3. Run the owned suite with the stubs **not** installed
+   (`tests/_p4_stubs.py` is only activated by the `stubbed` fixture). Every test
+   must pass unchanged — that is the contract-equivalence proof 5.1 asks for.
+4. Delete nothing. `tests/_p4_stubs.py` stays: the suite must remain runnable
+   without P1-P3 present, which is what keeps it deterministic and offline.
+5. Remove the two temporary `# type: ignore[misc]` comments on the `BaseTool`
+   subclass lines in `plugins/example_hello.py` and `plugins/example_database.py`,
+   which exist only because `agent_harness.tools.base` was absent.
+6. Re-run `bash gates.sh`; `mypy --strict` must stay clean.
+
+**Known contract risks to check at step 3**
+
+- `AgentError` must derive from `Exception` (SCR-P4-6). If P1 shipped a plain
+  dataclass, the harness's `except AgentError` paths cannot work.
+- `Config.apply_overrides` is used when present and skipped when absent
+  (SCR-P4-9). Either is fine; no CLI change is needed.
+- `ExecutionMetrics.from_plan(plan, timings, llm_usage)` and
+  `render_report(plan, metrics, *, style)` signatures must match SPEC-003 §6 and
+  SPEC-006 §7, which is what the stubs were written against.
+
+#### Troubleshooting conformance
+
+Every entry in the Developer README's troubleshooting section maps to a concrete
+signal this plan produces. `tests/test_harness.py::TestTroubleshootingMessages`
+pins the four P4 owns; the other two are owned downstream and this plan's job is
+the surfacing.
+
+| README symptom | Reproduce with | Signal P4 produces | Exit |
+|---|---|---|---|
+| `OPENAI_API_KEY not set` | `env -u OPENAI_API_KEY python -m agent_harness "x"` | `WARNING api_key_missing` naming the variable, `remediation="cp .env.example .env and add your key"` | 0 for `--list-tools` (SPEC-006 K5); 1 for a run |
+| `ModuleNotFoundError: No module named 'agent_harness'` | `python -c "import agent_harness; agent_harness.Nope"` | `AttributeError` naming the attribute; a genuinely missing owner module raises `ImportError` naming that module, never a bare failure | n/a |
+| `wkhtmltopdf not found` | `python -m agent_harness "x"` with no `wkhtmltopdf` on `PATH` | `INFO pdf_export_degraded`, naming `wkhtmltopdf` — informational, construction still succeeds | unchanged |
+| `Rate limit exceeded` | P3's recovery cascade | Not P4's to detect. Surfaced through `HarnessResult.errors`, and exit 3 vs 1 tells a caller whether anything was salvaged | 3 or 1 |
+| Code execution hangs | P2's `execution.step_timeout` | Not P4's to detect. Surfaces as a failed step in the plan and in `HarnessResult.errors` | 3 or 1 |
+| Agent produces too many steps | `python -m agent_harness --max-steps 3 "x"` | Overrides `execution.max_steps`. A non-positive or non-integer value is a usage error naming the flag, not a silent no-op | 0, or 2 for a bad value |
+
+Two additions beyond the README, both warned at startup because they are
+surprises a user would otherwise discover late: `shell_execution_enabled`
+(`WARNING`) when `security.allow_shell` is true, and `credentials_transmitted`
+(`WARNING`) naming the environment variables that would go over the network.
+
+One deliberate divergence worth stating: a missing API key is **not** fatal at
+construction. SPEC-005 § 4 says it should be, but SPEC-006 K5 requires
+`--list-tools` to work without credentials, and `--list-tools` must construct a
+harness. The two cannot both hold; SCR-P4-7 records the resolution in favour of
+K5, with the failure raised at first LLM use instead.
+
+#### Config-surface matrix
+
+All 34 keys of the SPEC-006 § 1 schema are accounted for: **12 are touched by
+this plan, 22 are passed through untouched**. `tests/test_harness.py::
+TestConfigSurface` derives the "touched" set by parsing this plan's own sources
+for `config.<section>.<key>` reads and `config.get("...")` lookups, so the matrix
+cannot drift from the code. **Unmapped keys: 0** — no SCR required.
+
+| Section | Key | P4's relationship | Consumed by |
+|---|---|---|---|
+| `llm` | `provider` | read — startup warning names the live providers | P4 + P1 |
+| `llm` | `api_key_env` | read — startup warning names the env var at risk | P4 + P1 |
+| `llm` | `model`, `fallback_model`, `base_url`, `max_tokens`, `temperature`, `timeout`, `max_retries`, `cost_per_1k_tokens` | pass-through | P1 |
+| `execution` | `max_steps` | **CLI write** (`--max-steps`), not read here | P3 |
+| `execution` | `output_dir` | read (`_ensure_directories`) + **CLI write** (`--output-dir`) | P4 |
+| `execution` | `temp_dir` | read (`_ensure_directories`) | P4 |
+| `execution` | `enable_replan` | read (`_apply_recovery_policy`) + **CLI write** (`--no-fallback`) | P4 + P3 |
+| `execution` | `step_timeout`, `max_retries`, `retry_backoff`, `retry_base_delay`, `abort_on_critical_failure` | pass-through | P3 |
+| `search` | `provider`, `api_key_env` | read — startup warning on transmitted credentials | P4 + P2 |
+| `search` | `max_results` | pass-through | P2 |
+| `security` | `allow_shell` | read — startup warning `shell_execution_enabled` | P4 + P2 |
+| `security` | `sandbox_code`, `code_timeout`, `max_output_bytes`, `network_in_code`, `sensitive_patterns` | pass-through | P2 / P1 |
+| `logging` | `level` | **CLI write** (`--log-level`, `AGENT_HARNESS_LOG_LEVEL`), not read here | P1 |
+| `logging` | `file`, `format`, `console` | pass-through | P1 |
+| `plugins` | `dirs`, `auto_load` | read (`_load_plugins`, `discover_tools`) | P4 |
+
+The four CLI overrides are exactly the ones SPEC-005 § 2 documents, asserted by
+test against `OVERRIDE_PATHS` plus the `--no-fallback` write.
+
+Worth recording: writing this as a test rather than a table found three reads an
+informal audit had missed — `llm.provider`, `search.provider` and
+`search.api_key_env`. They are legitimate (the transmitted-credentials warning
+cannot name what it does not look up), but they were undocumented until now.
+
+**Status: execution BLOCKED.** The orchestrator's progress board in
+`planning/README.md` §5 still shows P1, P2 and P3 at `0/5` / `gated (no
+skills)`, even though all seven of their module packages are now present in
+`main` via merged PRs. Until the board reports them done, I1 has not been
+declared open and the swap has not been executed. The checklist above is ready
+to run the moment it is.

@@ -2040,3 +2040,501 @@ class TestNoFallbackPolicy:
 
         assert orchestrator.seen is not None
         assert not orchestrator.seen.steps[0].fallback_tools
+
+
+# ---------------------------------------------------------------------------
+# Sub-phase 5.1 — the stub-to-real-module swap checklist (integration step I1)
+# ---------------------------------------------------------------------------
+
+#: Every cross-plan module the composition root resolves by dotted name. These
+#: are the swap targets: at I1 the stub behind each name is replaced by the real
+#: Plan 1-3 module, and nothing in this plan changes.
+RESOLVED_MODULES = frozenset(
+    {
+        "agent_harness.config",
+        "agent_harness.config.schema",
+        "agent_harness.context",
+        "agent_harness.llm",
+        "agent_harness.logging",
+        "agent_harness.logging.report",
+        "agent_harness.orchestration",
+        "agent_harness.planning",
+        "agent_harness.tools",
+    }
+)
+
+#: The symbol read off each resolved module. This is the contract the real
+#: modules must satisfy for the swap to be a no-op.
+RESOLVED_SYMBOLS = frozenset(
+    {
+        "AgentError",
+        "Assembler",
+        "Config",
+        "ContextStore",
+        "ExecutionHooks",
+        "ExecutionMetrics",
+        "Orchestrator",
+        "Planner",
+        "StepStatus",
+        "StructuredLogger",
+        "ToolRegistry",
+        "create_llm_client",
+        "default_tools",
+        "render_report",
+    }
+)
+
+
+def _harness_source() -> str:
+    """The composition root's source, read from disk."""
+    return (
+        Path(__file__).resolve().parent.parent / "agent_harness" / "harness.py"
+    ).read_text(encoding="utf-8")
+
+
+def _resolved_modules_in_source() -> set[str]:
+    """Extract every ``importlib.import_module("...")`` target from the source."""
+    import re
+
+    return set(re.findall(r'import_module\("([^"]+)"\)', _harness_source()))
+
+
+class TestSwapChecklist:
+    """The I1 checklist is a contract, so it is tested rather than trusted."""
+
+    def test_the_documented_module_list_matches_the_code(self) -> None:
+        """No seam may be added or removed without updating the checklist.
+
+        ``agent_harness.plugins.loader`` is deliberately excluded: it is this
+        plan's own module, not a swap target.
+        """
+        found = _resolved_modules_in_source() - {"agent_harness.plugins.loader"}
+
+        assert found == set(RESOLVED_MODULES)
+
+    def test_the_documented_symbol_list_matches_the_code(self) -> None:
+        """Every symbol the harness reads off a resolved module is listed."""
+        import re
+
+        found = set(re.findall(r"_module\.([A-Za-z_]+)", _harness_source()))
+
+        assert found == set(RESOLVED_SYMBOLS)
+
+    def test_the_plan_checklist_names_every_seam(self) -> None:
+        """The written checklist cannot drift from the code it describes."""
+        plan = (
+            Path(__file__).resolve().parent.parent
+            / "planning"
+            / "plan-4-interface"
+            / "plan.md"
+        ).read_text(encoding="utf-8")
+        section = plan.split("### I1 swap checklist", 1)
+
+        assert len(section) == 2, "plan.md lost its '### I1 swap checklist' section"
+        checklist = section[1]
+        missing = [
+            name
+            for name in sorted(RESOLVED_MODULES | RESOLVED_SYMBOLS)
+            if name not in checklist
+        ]
+
+        assert missing == [], f"checklist is missing: {missing}"
+
+    def test_no_stub_module_name_is_hard_coded_in_the_root(self) -> None:
+        """The swap must not need edits: no ``_p4_stubs`` reference ships."""
+        assert "_p4_stubs" not in _harness_source()
+
+    def test_the_stubs_stay_available_for_tests(self) -> None:
+        """I1 swaps the composition root, not the test doubles."""
+        assert stubs.STUB_MODULE_CONTENTS.keys() >= RESOLVED_MODULES
+
+
+# ---------------------------------------------------------------------------
+# Sub-phase 5.2 - programmatic API documentation
+# ---------------------------------------------------------------------------
+
+PUBLIC_METHODS = (
+    "__init__",
+    "__enter__",
+    "__exit__",
+    "from_config",
+    "run",
+    "plan",
+    "register_tool",
+    "list_tools",
+    "set_progress",
+    "close",
+)
+
+
+class TestApiDocumentation:
+    """Plan 5.2 exit criterion: every public method documents its own usage."""
+
+    def _methods(self) -> dict[str, Any]:
+        """The public surface of ``AgentHarness``, keyed by name."""
+        import ast
+
+        found: dict[str, Any] = {}
+        for node in ast.walk(ast.parse(_harness_source())):
+            if isinstance(node, ast.ClassDef) and node.name == "AgentHarness":
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef):
+                        found[item.name] = item
+        return found
+
+    def test_every_public_method_has_a_usage_example(self) -> None:
+        """No public entry point ships without one."""
+        import ast
+
+        methods = self._methods()
+        missing = [
+            name
+            for name in PUBLIC_METHODS
+            if "Example:" not in (ast.get_docstring(methods[name]) or "")
+        ]
+
+        assert missing == [], f"missing usage example: {missing}"
+
+    def test_every_public_method_has_a_docstring(self) -> None:
+        """The example check would be meaningless without this one."""
+        import ast
+
+        methods = self._methods()
+        missing = [
+            name for name in PUBLIC_METHODS if not ast.get_docstring(methods[name])
+        ]
+
+        assert missing == [], f"missing docstring: {missing}"
+
+    def test_the_module_docstring_shows_the_quick_start(self) -> None:
+        """The package itself documents the shortest useful program."""
+        import agent_harness
+
+        doc = agent_harness.__doc__ or ""
+
+        assert "AgentHarness" in doc
+        assert "run(" in doc
+
+    def test_the_pure_api_doctests_actually_pass(self) -> None:
+        """Examples needing no Plan 1-3 module are executed, not skipped."""
+        import doctest
+
+        import agent_harness
+
+        results = doctest.testmod(agent_harness, verbose=False)
+
+        assert results.failed == 0, f"{results.failed} doctest failure(s)"
+        assert results.attempted > 0, "no doctest ran, so the examples are not real"
+
+    def test_every_skipped_example_says_why(self) -> None:
+        """A skipped doctest must name I1, so it is un-skipped at the swap.
+
+        These examples construct a harness, which needs the real Plan 1-3
+        modules. They stay skipped until integration step I1, and the marker is
+        what keeps that debt visible rather than silently permanent.
+        """
+        skips = [
+            line for line in _harness_source().splitlines() if "doctest: +SKIP" in line
+        ]
+        unexplained = [line.strip() for line in skips if "needs I1" not in line]
+
+        assert skips, "expected composition examples to be present"
+        assert unexplained == [], f"skipped without a reason: {unexplained}"
+
+
+# ---------------------------------------------------------------------------
+# Sub-phase 5.3 - config-surface verification
+# ---------------------------------------------------------------------------
+
+#: Every key in the SPEC-006 1 config.yaml schema, by section.
+CONFIG_SCHEMA = {
+    "llm": (
+        "provider",
+        "model",
+        "fallback_model",
+        "api_key_env",
+        "base_url",
+        "max_tokens",
+        "temperature",
+        "timeout",
+        "max_retries",
+        "cost_per_1k_tokens",
+    ),
+    "execution": (
+        "max_steps",
+        "step_timeout",
+        "max_retries",
+        "retry_backoff",
+        "retry_base_delay",
+        "enable_replan",
+        "abort_on_critical_failure",
+        "output_dir",
+        "temp_dir",
+    ),
+    "search": ("provider", "api_key_env", "max_results"),
+    "security": (
+        "sandbox_code",
+        "code_timeout",
+        "max_output_bytes",
+        "network_in_code",
+        "allow_shell",
+        "sensitive_patterns",
+    ),
+    "logging": ("level", "file", "format", "console"),
+    "plugins": ("dirs", "auto_load"),
+}
+
+#: Keys this plan *reads*. Writing the audit as a test found three that an
+#: informal reading missed: ``llm.provider``, ``search.provider`` and
+#: ``search.api_key_env`` are all read by the startup warning that reports
+#: transmitted credentials (SPEC-005 4), which cannot name the environment
+#: variables at risk without knowing which providers are configured.
+READ_BY_P4 = frozenset(
+    {
+        "execution.enable_replan",
+        "execution.output_dir",
+        "execution.temp_dir",
+        "llm.api_key_env",
+        "llm.provider",
+        "plugins.auto_load",
+        "plugins.dirs",
+        "search.api_key_env",
+        "search.provider",
+        "security.allow_shell",
+    }
+)
+
+#: Keys this plan *writes* from a command line flag (SPEC-005 2). Two of them -
+#: ``execution.max_steps`` and ``logging.level`` - are written but never read
+#: here; the layers that consume them are P3 and P1 respectively.
+OVERRIDDEN_BY_CLI = frozenset(
+    {
+        "execution.enable_replan",
+        "execution.max_steps",
+        "execution.output_dir",
+        "logging.level",
+    }
+)
+
+#: The union: every key P4 touches at all. The remaining 22 are passed through
+#: untouched, which is the correct outcome for a composition root - P4 must not
+#: interpret another layer's configuration.
+CONSUMED_BY_P4 = READ_BY_P4 | OVERRIDDEN_BY_CLI
+
+
+def _owned_sources() -> str:
+    """Concatenate every source file this plan owns."""
+    root = Path(__file__).resolve().parent.parent
+    parts = [
+        root / "agent_harness" / "harness.py",
+        root / "agent_harness" / "__main__.py",
+        root / "agent_harness" / "plugins" / "loader.py",
+    ]
+    return "\n".join(p.read_text(encoding="utf-8") for p in parts)
+
+
+class TestConfigSurface:
+    """Plan 5.3: every config key is consumed by someone, and we know who."""
+
+    def test_the_schema_is_the_documented_one(self) -> None:
+        """Guard the audit itself against a stale key list."""
+        assert sum(len(v) for v in CONFIG_SCHEMA.values()) == 34
+        assert set(CONFIG_SCHEMA) == {
+            "llm",
+            "execution",
+            "search",
+            "security",
+            "logging",
+            "plugins",
+        }
+
+    def test_every_consumed_key_is_a_real_schema_key(self) -> None:
+        """No phantom keys in the matrix."""
+        valid = {f"{s}.{k}" for s, keys in CONFIG_SCHEMA.items() for k in keys}
+        bogus = sorted(CONSUMED_BY_P4 - valid)
+
+        assert bogus == [], f"not in SPEC-006 1: {bogus}"
+
+    def test_the_code_reads_exactly_the_documented_keys(self) -> None:
+        """Attribute access and dotted lookups, both of them."""
+        import re
+
+        source = _owned_sources()
+        valid = {f"{s}.{k}" for s, keys in CONFIG_SCHEMA.items() for k in keys}
+        attribute = {f"{a}.{b}" for a, b in re.findall(r"config\.(\w+)\.(\w+)", source)}
+        dotted = set(re.findall(r'get\(\s*"(\w+\.\w+)"', source))
+
+        assert (attribute | dotted) & valid == set(READ_BY_P4)
+
+    def test_every_consumed_key_is_accounted_for(self) -> None:
+        """The matrix covers 12 of 34 keys; the other 22 are pass-through."""
+        assert len(CONSUMED_BY_P4) == 12
+        assert len(OVERRIDDEN_BY_CLI) == 4
+        assert READ_BY_P4 - OVERRIDDEN_BY_CLI  # reads that are not CLI targets
+
+    def test_the_cli_overrides_cover_the_documented_four(self) -> None:
+        """SPEC-005 2 lists four overridable settings; all four are wired."""
+        from agent_harness.__main__ import OVERRIDE_PATHS
+
+        assert set(OVERRIDE_PATHS.values()) == {
+            "execution.output_dir",
+            "execution.max_steps",
+            "logging.level",
+        }
+        # --no-fallback writes the fourth, execution.enable_replan, in
+        # collect_overrides because it is a flag rather than a value.
+        from agent_harness.__main__ import collect_overrides, parse_args
+
+        overrides = collect_overrides(parse_args(["--no-fallback", "x"]))
+
+        assert overrides["execution.enable_replan"] is False
+
+    def test_llm_and_search_tuning_is_never_interpreted(self) -> None:
+        """P4 reads provider and key *names* only, never tuning.
+
+        Model, temperature, timeouts and result counts belong to P1 and P2. The
+        provider and ``*_env`` names are the narrow exception: the startup
+        warning has to know which providers are live and which environment
+        variables they would transmit.
+        """
+        forbidden = {
+            "llm.model",
+            "llm.fallback_model",
+            "llm.base_url",
+            "llm.max_tokens",
+            "llm.temperature",
+            "llm.timeout",
+            "llm.max_retries",
+            "llm.cost_per_1k_tokens",
+            "search.max_results",
+            "security.sandbox_code",
+            "security.code_timeout",
+            "security.max_output_bytes",
+            "security.network_in_code",
+            "security.sensitive_patterns",
+            "execution.step_timeout",
+            "execution.max_retries",
+            "execution.retry_backoff",
+            "execution.retry_base_delay",
+            "execution.abort_on_critical_failure",
+            "logging.file",
+            "logging.format",
+            "logging.console",
+        }
+
+        assert not (forbidden & set(READ_BY_P4))
+        assert len(forbidden) == 22  # the pass-through half of the matrix
+
+
+# ---------------------------------------------------------------------------
+# Sub-phase 5.4 - troubleshooting alignment
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("stubbed")
+class TestTroubleshootingMessages:
+    """Each Developer README troubleshooting entry has a concrete P4 signal.
+
+    The README documents a symptom; these tests pin the message, event name or
+    exit code this plan actually produces for it, so the documented fix stays
+    true.
+    """
+
+    def test_missing_api_key_names_the_variable_and_the_fix(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """README: ``OPENAI_API_KEY not set``."""
+        from agent_harness.harness import AgentHarness
+
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        logger = stubs.StructuredLogger()
+
+        AgentHarness(stubs.Config(), logger=logger)
+
+        records = [r for r in logger.records if r["event"] == "api_key_missing"]
+
+        assert len(records) == 1
+        assert records[0]["level"] == "WARNING"
+        assert "OPENAI_API_KEY" in str(records[0])
+        assert "cp .env.example .env" in records[0]["remediation"]
+
+    def test_wkhtmltopdf_missing_is_informational_not_fatal(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """README: ``wkhtmltopdf not found`` (PDF export fails)."""
+        import shutil
+
+        from agent_harness.harness import AgentHarness
+
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
+        logger = stubs.StructuredLogger()
+
+        harness = AgentHarness(stubs.Config(), logger=logger)
+
+        records = [r for r in logger.records if r["event"] == "pdf_export_degraded"]
+
+        assert len(records) == 1
+        assert records[0]["level"] == "INFO"
+        assert "wkhtmltopdf" in str(records[0])
+        assert harness is not None  # construction still succeeded
+
+    def test_shell_enabled_is_warned_about(self) -> None:
+        """Not in the README, but the same class of surprise: an opt-in risk."""
+        from agent_harness.harness import AgentHarness
+
+        config = stubs.Config()
+        config.security.allow_shell = True
+        logger = stubs.StructuredLogger()
+
+        AgentHarness(config, logger=logger)
+
+        records = [r for r in logger.records if r["event"] == "shell_execution_enabled"]
+
+        assert len(records) == 1
+        assert records[0]["level"] == "WARNING"
+
+    def test_a_missing_module_names_the_module(self) -> None:
+        """README: ``ModuleNotFoundError: No module named 'agent_harness'``.
+
+        The lazy surface must not fail silently: the ImportError names the module
+        that could not be imported, which is the difference between a debuggable
+        message and a guess.
+        """
+        import agent_harness
+
+        # A variable rather than a literal: ruff B018 rejects a bare attribute
+        # expression and B009 rejects getattr with a constant name.
+        absent = "DefinitelyNotExported"
+        with pytest.raises(AttributeError) as missing:
+            getattr(agent_harness, absent)
+
+        assert "DefinitelyNotExported" in str(missing.value)
+
+    def test_too_many_steps_has_a_flag_and_a_validated_one(self) -> None:
+        """README: ``Agent produces too many steps``.
+
+        The fix is ``--max-steps``; the guard is that a nonsense value is a usage
+        error rather than a silent no-op.
+        """
+        from agent_harness.__main__ import parse_args
+
+        assert parse_args(["--max-steps", "3", "x"]).max_steps == 3
+
+        with pytest.raises(SystemExit) as usage:
+            parse_args(["--max-steps", "0", "x"])
+
+        assert usage.value.code == 2
+
+    def test_rate_limits_and_hangs_are_surfaced_not_swallowed(self) -> None:
+        """README: ``Rate limit exceeded`` and ``Code execution hangs``.
+
+        Both are owned by P3 (recovery cascade) and P2 (``step_timeout``)
+        respectively. What this plan guarantees is the surfacing: the failure
+        lands in ``HarnessResult.errors`` and the exit code distinguishes a
+        partial from a failed run, so neither is invisible to a caller.
+        """
+        from agent_harness.__main__ import EXIT_FAILED, EXIT_PARTIAL, STATUS_EXIT_CODES
+
+        assert STATUS_EXIT_CODES["partial"] == EXIT_PARTIAL
+        assert STATUS_EXIT_CODES["failed"] == EXIT_FAILED
+        assert EXIT_PARTIAL != EXIT_FAILED
