@@ -1,2 +1,6 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Windows batch scripts must keep CRLF line endings: cmd.exe mis-parses a
+# multi-line block that has been converted to LF. Without this, a clone on
+# macOS/Linux (or a repo configured with core.autocrlf=input) would check out
+# working-looking .bat files that fail at the first `if (` block.
+*.bat text eol=crlf
+*.cmd text eol=crlf

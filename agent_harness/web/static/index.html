@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Harness — local UI</title>
+<meta name="description" content="Submit a task to the local agent harness and watch it plan, execute and recover.">
+<link rel="stylesheet" href="/static/tokens.css">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<a class="visually-hidden" href="#task-prompt">Skip to the task form</a>
+
+<div class="shell">
+  <div class="brand">
+    <span class="brand__mark" aria-hidden="true">AH</span>
+    <span class="brand__text">
+      <span class="brand__name">Agent Harness</span>
+      <span class="brand__sub">local-first agent runtime</span>
+    </span>
+  </div>
+
+  <header class="header">
+    <div class="header__facts" id="health" role="status" aria-live="polite">
+      <div class="fact">
+        <span class="fact__label">Provider</span>
+        <span class="fact__value" id="health-provider">…</span>
+      </div>
+      <div class="fact">
+        <span class="fact__label">Model</span>
+        <span class="fact__value" id="health-model">…</span>
+      </div>
+      <div class="fact">
+        <span class="fact__label">Output</span>
+        <span class="fact__value" id="health-output">…</span>
+      </div>
+      <div class="fact">
+        <span class="fact__label">Credential</span>
+        <span class="fact__value" id="health-key">…</span>
+      </div>
+    </div>
+    <button class="button button--quiet" type="button" id="refresh">Refresh</button>
+  </header>
+
+  <nav class="rail" aria-label="Task history">
+    <h2 class="rail__heading">Recent tasks</h2>
+    <ul class="history" id="history">
+      <li class="history__empty">No tasks yet — submit one to get started.</li>
+    </ul>
+
+    <h2 class="rail__heading">Tools</h2>
+    <ul class="history" id="tools">
+      <li class="history__empty">Loading registry…</li>
+    </ul>
+  </nav>
+
+  <main class="main">
+    <section class="compose" aria-labelledby="compose-title">
+      <h1 class="compose__title" id="compose-title">What should the agent do?</h1>
+      <p class="compose__hint">
+        The task is decomposed into a plan, executed step by step with automatic retry,
+        fallback and re-planning, and assembled into a deliverable under your output directory.
+      </p>
+
+      <form id="task-form" novalidate>
+        <div class="compose__field">
+          <label class="compose__label" for="task-prompt">Task</label>
+          <textarea
+            class="compose__input"
+            id="task-prompt"
+            name="prompt"
+            rows="4"
+            maxlength="20000"
+            required
+            aria-describedby="prompt-help prompt-error"
+            placeholder="Research the top 3 Python web frameworks and write a comparison table with sources."></textarea>
+          <p class="compose__hint" id="prompt-help">
+            Up to 20,000 characters. Ctrl+Enter submits; the agent runs locally and only calls the LLM provider.
+          </p>
+          <p class="field-error" id="prompt-error" role="alert"></p>
+        </div>
+
+        <div class="compose__actions">
+          <button class="button button--primary" type="submit" id="submit">Run task</button>
+          <div class="presets" role="group" aria-label="Example tasks">
+            <span class="presets__label">Try</span>
+            <button class="button" type="button" data-preset="Research the top 3 Python web frameworks and write a comparison table with sources.">Research + table</button>
+            <button class="button" type="button" data-preset="Write a Python function that parses a CSV of sales records and prints the top 5 products by revenue, then run it on a small sample.">Generate + run code</button>
+            <button class="button" type="button" data-preset="Summarise the riskiest parts of a file-processing pipeline and propose mitigations as a short report.">Analysis report</button>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <div class="notice notice--error" id="error" role="alert" hidden>
+      <span class="notice__code" id="error-code"></span>
+      <span id="error-message"></span>
+    </div>
+
+    <section class="run" id="run" hidden aria-labelledby="steps-title">
+      <article class="panel">
+        <header class="panel__head">
+          <h2 class="panel__title" id="steps-title">Plan &amp; steps</h2>
+          <span class="live" id="live" hidden><span class="live__dot" aria-hidden="true"></span>live</span>
+        </header>
+        <div class="panel__body panel__body--flush">
+          <ol class="steps" id="steps">
+            <li class="artifacts__empty">Waiting for the plan…</li>
+          </ol>
+        </div>
+      </article>
+
+      <article class="panel">
+        <header class="panel__head">
+          <h2 class="panel__title">Execution log</h2>
+          <span class="badge badge--idle" id="run-status">queued</span>
+        </header>
+        <div class="log" id="log" role="log" aria-live="polite" aria-label="Execution log">
+          <span class="log__empty">Events will stream here.</span>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel" id="result-panel" hidden aria-labelledby="result-title">
+      <header class="panel__head">
+        <h2 class="panel__title" id="result-title">Deliverable</h2>
+        <span class="fact__value" id="result-files"></span>
+      </header>
+      <div class="tabs" role="tablist" aria-label="Result views">
+        <button class="tab" type="button" role="tab" id="tab-output" aria-controls="output" aria-selected="true">Output</button>
+        <button class="tab" type="button" role="tab" id="tab-report" aria-controls="report" aria-selected="false">Report</button>
+        <button class="tab" type="button" role="tab" id="tab-metrics" aria-controls="metrics" aria-selected="false">Metrics</button>
+      </div>
+      <div class="output" id="output" role="tabpanel" aria-labelledby="tab-output">
+        <p class="output__placeholder">Not finished yet.</p>
+      </div>
+      <div class="output" id="report" role="tabpanel" aria-labelledby="tab-report" hidden>
+        <pre class="output__prose"></pre>
+      </div>
+      <div class="output" id="metrics" role="tabpanel" aria-labelledby="tab-metrics" hidden>
+        <div class="facts-grid" id="metrics-grid"></div>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="artifacts-title">
+      <header class="panel__head">
+        <h2 class="panel__title" id="artifacts-title">Output files</h2>
+        <button class="button button--quiet" type="button" id="refresh-artifacts">Reload</button>
+      </header>
+      <div class="panel__body panel__body--flush">
+        <ul class="artifacts" id="artifacts">
+          <li class="artifacts__empty">No files yet.</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="/static/app.js" defer></script>
+</body>
+</html>

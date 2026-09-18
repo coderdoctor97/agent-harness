@@ -24,6 +24,16 @@ dev = [
     "mypy>=1.0",
 ]
 anthropic = ["anthropic>=0.18.0"]
+web = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "pydantic>=2.0",
+]
+
+[tool.setuptools.package-data]
+# The UI ships as plain HTML/CSS/JS served from the package: no bundler, no CDN,
+# so the interface works offline (PRD G6).
+"agent_harness.web" = ["static/*.html", "static/*.css", "static/*.js"]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

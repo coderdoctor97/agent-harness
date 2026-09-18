@@ -111,11 +111,19 @@ Update one row per plan (orchestrator or plan owner):
 
 | Plan | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Phase 5 | Status | Agent |
 |---|---|---|---|---|---|---|---|
-| P1 Foundation | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | 🟡 gated (no skills) | — |
-| P2 Tools | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | 🟡 gated (no skills) | — |
-| P3 Orchestration | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | 🟡 gated (no skills) | — |
-| P4 Surface | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | 🟡 gated (no skills) | — |
-| P5 Quality | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | 🟡 gated (no skills) | — |
+| P1 Foundation | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ done — packages, `pyproject.toml` and all four suites green; SCR-P1-3's editable-install verification completed at I1 | Agent 1 |
+| P2 Tools | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ done — `tests/test_tools/` green (owner log: 230 tests, handoff at 5.5) | Agent 2 |
+| P3 Orchestration | ✅ 5/5 | ✅ 5/5 | 🟨 1/5 | ⬜ 0/5 | ⬜ 0/5 | 🟡 code complete, **owner log stale** — `orchestrator.py`/`recovery.py`/`assembler.py` and `tests/test_orchestrator.py` are present and green, but 3.2–5.5 are still marked `pending` in plan-3's Phase Execution Log | Agent 3 |
+| P4 Surface | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ done — 5.1's swap **executed at I1** (commit `993fdac`, SCR-P4-12); suite green | Agent 4 |
+| P5 Quality | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | ⬜ 0/5 | ⬜ not started — owns `tests/conftest.py`, `tests/integration/`, CI, examples, release | — |
+| P6 Web UI | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ done (user-requested: local web UI + Windows scripts) — see `planning/plan-6-web-ui/plan.md` | Agent 6 |
+
+> **Board reconciliation (2026-09-18, I1).** Rows above were updated from each plan's own
+> status log plus the evidence in `main`: every P1–P4 package is present, `git log` shows
+> the merges, and the full unit suite is green (1425 passed at the time of writing).
+> Two rows need their owner's attention rather than an edit here: **P3** must mark 3.2–5.5
+> done in its own log (the code shipped), and **P5** is the only unstarted plan. The gate
+> column that read "gated (no skills)" was stale — 50 skills are registered.
 
 Legend: ⬜ pending · 🟨 in progress · ✅ done · 🟥 blocked. A phase counts done at 5/5 sub-phases.
 
@@ -130,6 +138,8 @@ Legend: ⬜ pending · 🟨 in progress · ✅ done · 🟥 blocked. A phase cou
 | Date | ID | Summary | Affected plans |
 |---|---|---|---|
 | 2026-09-14 | INIT | Foundation published; all plans gated on skill-dictionary population | P1–P5 |
+| 2026-09-18 | I1 | Composition root swapped onto the real P1–P3 modules; P4 suite green (SCR-P4-11, SCR-P4-12) | P4 |
+| 2026-09-18 | P6 | New plan published: local web UI (PRD G8, FastAPI + SSE) and the Windows on-ramp (`setup.bat`, `start.bat`); SCR-P6-1 filed for a `web` config section | P1 (SCR), P5 (CI installs `.[dev,web]`), P6 |
 
 ---
 
