@@ -86,8 +86,12 @@ class StructuredLogger:
 
     def log(self, level: str, component: str, event: str, **fields: object) -> None:
         """Emit one catalog event as JSONL. Spec: SPEC-006 §6.1–6.2."""
-        if level not in LEVELS or event not in EVENTS:
-            raise ValueError("Unknown logging level or event")
+        if level not in LEVELS:
+            raise ValueError(f"Unknown logging level: {level}")
+        # SPEC-006 §6.1 declares EVENTS as the REQUIRED minimum, not a ceiling.
+        # Unknown events are allowed through so additive observability (SCR-P3-10,
+        # SCR-P4-10) cannot become a runtime failure. The event name is preserved
+        # verbatim so downstream consumers can still filter on it.
         if LEVELS[level] < LEVELS[self._config.logging.level]:
             return
         record: dict[str, object] = {

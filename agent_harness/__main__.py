@@ -325,8 +325,10 @@ def _agent_error_type() -> Any:
     return importlib.import_module("agent_harness.config.schema").AgentError
 
 
-def _error_code(exc: BaseException) -> str:
+def _error_code(exc: BaseException | dict) -> str:
     """The ``code`` on an ``AgentError``, or the exception class name."""
+    if isinstance(exc, dict):
+        return str(exc.get("code", "SYSTEM_ERROR"))
     code = getattr(exc, "code", None)
     return str(code) if code else type(exc).__name__
 
@@ -574,7 +576,11 @@ def _render_result(result: Any, *, rich: bool = False) -> str:
     if errors:
         parts.append("")
         parts.append(f"{len(errors)} error(s):")
-        parts.extend(f"  - [{_error_code(e)}] {e.message}" for e in errors)
+        for e in errors:
+            if isinstance(e, dict):
+                parts.append(f"  - [{e.get('code', 'ERROR')}] {e.get('error', '')}")
+            else:
+                parts.append(f"  - [{_error_code(e)}] {getattr(e, 'message', str(e))}")
     parts.append("")
     parts.append(f"Status: {result.status}")
     return "\n".join(parts) + "\n"
