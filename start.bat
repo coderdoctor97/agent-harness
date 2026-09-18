@@ -39,6 +39,16 @@ if /I "%~1"=="/port" (
     shift
     goto parse_args
 )
+if /I "%~1"=="/host" (
+    if "%~2"=="" (
+        echo   [ERROR]   /host needs a hostname, for example: start.bat /host 0.0.0.0
+        goto :fail
+    )
+    set "EXTRA_ARGS=!EXTRA_ARGS! --host %~2"
+    shift
+    shift
+    goto parse_args
+)
 if /I "%~1"=="/cli" (
     set "MODE=cli"
     shift

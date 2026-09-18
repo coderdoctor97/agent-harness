@@ -1,30 +1,13 @@
 """The FastAPI application behind the local web UI (PRD G8).
 
-Route map
----------
-``GET  /``                    the single-page UI
-``GET  /api/health``          server + non-secret config summary
-``GET  /api/tools``           the registry's tools (SPEC-005 § 1)
-``POST /api/tasks``           submit a task, return the queued record
-``GET  /api/tasks``           task history, newest first
-``GET  /api/tasks/{id}``      task detail: steps, metrics, output, report
-``GET  /api/tasks/{id}/events``  pollable event batch (cursor in ``since``)
-``GET  /api/tasks/{id}/stream``  the same events as Server-Sent Events
-``GET  /api/artifacts``       files under ``execution.output_dir``
-``GET  /api/artifacts/{path}``   one artifact's bytes, containment-checked
-
-Two deliberate choices:
-
-* **Polling is a first-class transport, not a fallback.** The events endpoint
-  takes a ``since`` cursor and returns a batch; the SSE endpoint is that same
-  read in a loop. A proxy that buffers or drops streams therefore degrades to
-  polling instead of breaking the UI, and both transports are tested.
-* **The server owns no agent state of its own.** Everything the UI shows comes
-  from :class:`agent_harness.web.runner.TaskRunner`, so the same objects are
-  reachable from Python for scripting and tests.
-
-Spec: PRD G8 · SPEC-003 § 2.1 (progress hooks) · SPEC-006 § 3.4 (no secret ever
-leaves the process) · SPEC-005 § 2.1 (interrupt convention)
+Full-featured local AI development environment API:
+- Workspace inspection and hierarchical file tree
+- Path-safe file viewing and saving (path traversal protection)
+- Real-time Git diff and status
+- Interactive agent controls (pause, resume, stop, intervene)
+- Human-in-the-loop checkpoints (approve, reject, continue)
+- Controlled terminal execution (pytest, ruff, git)
+- PR automation and MCP integration layer
 """
 
 from __future__ import annotations
@@ -50,23 +33,39 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
+from agent_harness.web.mcp import MCPClientAdapter
 from agent_harness.web.runner import ArtifactError, Task, TaskRunner
 from agent_harness.web.schemas import (
     ArtifactView,
+    BranchSwitchRequest,
+    CheckpointActionRequest,
+    CheckpointView,
+    DiffResponse,
     ErrorView,
     EventPage,
     EventView,
+    FileContentView,
+    FileListResponse,
+    FileSaveRequest,
+    GitHubStatusView,
     HealthView,
+    InterventionRequest,
     MetricsView,
+    PRCreateRequest,
+    PRPrepareResponse,
+    RoadmapItemView,
     StepView,
     TaskDetail,
     TaskRequest,
     TaskSummary,
+    TerminalRunRequest,
+    TerminalRunResponse,
     ToolView,
+    WorkspaceView,
 )
+from agent_harness.web.workspace import SecurityError, WorkspaceService
 
-#: The UI is one static file served from the package, so there is no build step,
-#: no bundler and no CDN dependency: ``start.bat`` works offline (PRD G6).
+#: Static assets served from the package itself (no bundler, offline-capable).
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _INDEX = _STATIC_DIR / "index.html"
 
@@ -74,18 +73,14 @@ _INDEX = _STATIC_DIR / "index.html"
 _STREAM_POLL_SECONDS = 15.0
 
 
-def create_app(config: Any = None, *, runner: TaskRunner | None = None) -> FastAPI:
-    """Build the ASGI app.
-
-    Args:
-        config: a :class:`agent_harness.config.schema.Config`; loaded from the
-            standard sources when omitted.
-        runner: an existing :class:`~agent_harness.web.runner.TaskRunner`, for
-            tests and for embedding the UI in a larger process.
-
-    Returns:
-        A configured :class:`fastapi.FastAPI` instance.
-    """
+def create_app(
+    config: Any = None,
+    *,
+    runner: TaskRunner | None = None,
+    workspace: WorkspaceService | None = None,
+    mcp: MCPClientAdapter | None = None,
+) -> FastAPI:
+    """Build the ASGI app."""
     if runner is None:
         if config is None:
             config_module = importlib.import_module("agent_harness.config")
@@ -93,27 +88,34 @@ def create_app(config: Any = None, *, runner: TaskRunner | None = None) -> FastA
         runner = TaskRunner(config)
     resolved_config = config if config is not None else runner.config
 
+    if workspace is None:
+        workspace = WorkspaceService()
+    if mcp is None:
+        mcp = MCPClientAdapter()
+
     app = FastAPI(
         lifespan=_lifespan(runner),
-        title="Agent Harness — local web UI",
+        title="Agent Harness — AI Development Environment",
         version=_version(),
-        summary="Submit tasks to the local agent and watch them execute.",
+        summary="Local-first autonomous agent environment with human-in-the-loop control.",
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
     )
     app.state.runner = runner
     app.state.config = resolved_config
+    app.state.workspace = workspace
+    app.state.mcp = mcp
 
-    # Static assets are served from the package itself (no build step, no CDN).
-    if _STATIC_DIR.is_dir():  # pragma: no branch - always true in a real install
+    # Static assets mount
+    if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
     # -- UI -------------------------------------------------------------------
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def index() -> HTMLResponse:
-        """Serve the single-page UI."""
-        if not _INDEX.is_file():  # pragma: no cover - packaging accident
+        """Serve the single-page IDE."""
+        if not _INDEX.is_file():
             raise HTTPException(status_code=500, detail="UI assets are missing")
         return HTMLResponse(_INDEX.read_text(encoding="utf-8"))
 
@@ -122,11 +124,12 @@ def create_app(config: Any = None, *, runner: TaskRunner | None = None) -> FastA
         """Answer the browser's automatic favicon probe without a 404."""
         return JSONResponse({"detail": "no favicon"}, status_code=204)
 
-    # -- meta -----------------------------------------------------------------
+    # -- Health & Status ------------------------------------------------------
 
     @app.get("/api/health", response_model=HealthView)
     def health() -> HealthView:
-        """Report liveness plus the non-secret parts of the live configuration."""
+        """Report liveness plus non-secret configuration summary."""
+        ws_info = workspace.get_workspace_info()
         return HealthView(
             ok=True,
             version=_version(),
@@ -136,15 +139,36 @@ def create_app(config: Any = None, *, runner: TaskRunner | None = None) -> FastA
             output_dir=str(_cfg(resolved_config, "execution.output_dir", "./output")),
             api_key_configured=_api_key_configured(resolved_config),
             plugin_errors=_plugin_error_count(resolved_config),
+            workspace=ws_info["name"],
+            branch=ws_info.get("branch"),
+            connection_state=ws_info.get("connection_state", "local"),
         )
+
+    @app.get("/api/status")
+    def overall_status() -> dict[str, Any]:
+        """Comprehensive developer-environment status."""
+        active = runner.get_active_task()
+        git_info = workspace.get_git_info()
+        return {
+            "ok": True,
+            "agent_state": active.status if active else "idle",
+            "active_task_id": active.id if active else None,
+            "workspace": workspace.get_workspace_info(),
+            "git": git_info,
+            "mcp": mcp.status(),
+            "version": _version(),
+            "provider": str(_cfg(resolved_config, "llm.provider", "unknown")),
+            "model": str(_cfg(resolved_config, "llm.model", "unknown")),
+            "api_key_configured": _api_key_configured(resolved_config),
+        }
 
     @app.get("/api/tools", response_model=list[ToolView])
     def tools() -> list[ToolView]:
-        """List the registry's tools, in the registry's own order."""
+        """List registered tools."""
         descriptors = _list_tools(runner)
         return [ToolView(**descriptor) for descriptor in descriptors]
 
-    # -- tasks ----------------------------------------------------------------
+    # -- Tasks ----------------------------------------------------------------
 
     @app.post("/api/tasks", response_model=TaskDetail, status_code=201)
     def create_task(payload: TaskRequest) -> TaskDetail:
@@ -170,7 +194,7 @@ def create_app(config: Any = None, *, runner: TaskRunner | None = None) -> FastA
 
     @app.get("/api/tasks/{task_id}/events", response_model=EventPage)
     def task_events(task_id: str, since: int = 0) -> EventPage:
-        """Return the events the caller has not seen yet."""
+        """Return events caller has not seen yet."""
         task = _require_task(runner, task_id)
         events, next_seq = runner.events_since(task_id, since)
         return EventPage(
@@ -183,13 +207,7 @@ def create_app(config: Any = None, *, runner: TaskRunner | None = None) -> FastA
     def task_stream(
         task_id: str, request: Request, since: int = 0
     ) -> StreamingResponse:
-        """Stream a task's events as Server-Sent Events.
-
-        The stream ends when the task reaches a terminal state *and* the client's
-        cursor has caught up, so a completed task never leaves a connection
-        hanging open. An async generator is used (rather than a sync one off a
-        thread) so the disconnect probe can be awaited between frames.
-        """
+        """Stream a task's events as Server-Sent Events."""
         _require_task(runner, task_id)
         return StreamingResponse(
             _event_stream(runner, task_id, since, request),
@@ -197,7 +215,168 @@ def create_app(config: Any = None, *, runner: TaskRunner | None = None) -> FastA
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # -- artifacts ------------------------------------------------------------
+    @app.get("/api/events", response_model=EventPage)
+    def global_events(since: int = 0) -> EventPage:
+        """Return events from the active or most recent task."""
+        active = runner.get_active_task()
+        if active is None:
+            tasks = runner.list_tasks(limit=1)
+            active = tasks[0] if tasks else None
+        if active is None:
+            return EventPage(events=[], next_seq=0, terminal=True)
+        events, next_seq = runner.events_since(active.id, since)
+        return EventPage(
+            events=[_event_view(event) for event in events],
+            next_seq=next_seq,
+            terminal=active.terminal,
+        )
+
+    # -- Interactive Agent Controls & Checkpoints ------------------------------
+
+    @app.post("/api/agent/pause", response_model=TaskDetail)
+    def pause_agent(payload: CheckpointActionRequest | None = None) -> TaskDetail:
+        """Pause running agent execution."""
+        task_id = payload.task_id if payload else None
+        try:
+            task = runner.pause(task_id)
+            return _detail(task)
+        except KeyError as exc:
+            raise _not_found("TASK_NOT_FOUND", str(exc)) from exc
+
+    @app.post("/api/agent/resume", response_model=TaskDetail)
+    def resume_agent(payload: InterventionRequest | None = None) -> TaskDetail:
+        """Resume paused agent execution, optionally with updated instructions."""
+        task_id = payload.task_id if payload else None
+        instruction = payload.instruction if payload else None
+        try:
+            task = runner.resume(task_id, instruction=instruction)
+            return _detail(task)
+        except KeyError as exc:
+            raise _not_found("TASK_NOT_FOUND", str(exc)) from exc
+
+    @app.post("/api/agent/stop", response_model=TaskDetail)
+    def stop_agent(payload: CheckpointActionRequest | None = None) -> TaskDetail:
+        """Stop current agent execution safely without terminating the server."""
+        task_id = payload.task_id if payload else None
+        try:
+            task = runner.stop(task_id)
+            return _detail(task)
+        except KeyError as exc:
+            raise _not_found("TASK_NOT_FOUND", str(exc)) from exc
+
+    @app.post("/api/agent/approve", response_model=TaskDetail)
+    def approve_checkpoint(payload: CheckpointActionRequest | None = None) -> TaskDetail:
+        """Approve checkpoint and continue execution."""
+        task_id = payload.task_id if payload else None
+        try:
+            task = runner.approve(task_id)
+            return _detail(task)
+        except KeyError as exc:
+            raise _not_found("TASK_NOT_FOUND", str(exc)) from exc
+
+    @app.post("/api/agent/reject", response_model=TaskDetail)
+    def reject_checkpoint(payload: CheckpointActionRequest | None = None) -> TaskDetail:
+        """Reject checkpoint with optional feedback note."""
+        task_id = payload.task_id if payload else None
+        reason = payload.reason if payload else None
+        try:
+            task = runner.reject(task_id, reason=reason)
+            return _detail(task)
+        except KeyError as exc:
+            raise _not_found("TASK_NOT_FOUND", str(exc)) from exc
+
+    @app.post("/api/agent/intervene", response_model=TaskDetail)
+    def intervene_agent(payload: InterventionRequest) -> TaskDetail:
+        """Submit mid-stream user instructions to the running agent."""
+        try:
+            task = runner.intervene(payload.task_id, payload.instruction)
+            return _detail(task)
+        except KeyError as exc:
+            raise _not_found("TASK_NOT_FOUND", str(exc)) from exc
+
+    # -- Workspace & Files API ------------------------------------------------
+
+    @app.get("/api/workspace", response_model=WorkspaceView)
+    def get_workspace() -> WorkspaceView:
+        """Get overview of the local workspace root."""
+        return WorkspaceView(**workspace.get_workspace_info())
+
+    @app.get("/api/files", response_model=FileListResponse)
+    def list_workspace_files() -> FileListResponse:
+        """Return hierarchical file tree of workspace root."""
+        return FileListResponse(**workspace.list_files())
+
+    @app.get("/api/files/{relative_path:path}", response_model=FileContentView)
+    def read_workspace_file(relative_path: str) -> FileContentView:
+        """Read a file's content safely within workspace bounds."""
+        try:
+            data = workspace.read_file(relative_path)
+            return FileContentView(**data)
+        except SecurityError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/files/save")
+    def save_workspace_file(payload: FileSaveRequest) -> dict[str, Any]:
+        """Save text content to a file safely within workspace root."""
+        try:
+            return workspace.save_file(payload.path, payload.content)
+        except SecurityError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Could not save file: {exc}") from exc
+
+    # -- Diff API -------------------------------------------------------------
+
+    @app.get("/api/diff", response_model=DiffResponse)
+    def get_diff() -> DiffResponse:
+        """Compute unified diff across all changed files in workspace."""
+        data = workspace.get_diff()
+        return DiffResponse(**data)
+
+    # -- Git & PR Automation --------------------------------------------------
+
+    @app.get("/api/github/status", response_model=GitHubStatusView)
+    def github_status() -> GitHubStatusView:
+        """Inspect Git & GitHub connectivity."""
+        return GitHubStatusView(**workspace.get_git_info())
+
+    @app.post("/api/git/branch")
+    def switch_branch(payload: BranchSwitchRequest) -> dict[str, Any]:
+        """Switch Git branch safely."""
+        try:
+            return workspace.switch_branch(payload.branch, force=payload.force)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/pr/prepare", response_model=PRPrepareResponse)
+    def prepare_pull_request() -> PRPrepareResponse:
+        """Prepare Pull Request summary based on real workspace changes."""
+        return PRPrepareResponse(**workspace.prepare_pr())
+
+    @app.post("/api/pr/create")
+    def create_pull_request(payload: PRCreateRequest) -> dict[str, Any]:
+        """Submit Pull Request using gh CLI."""
+        try:
+            return workspace.create_pr(payload.title, payload.description)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # -- Terminal Execution API -----------------------------------------------
+
+    @app.post("/api/terminal/run", response_model=TerminalRunResponse)
+    def run_terminal_command(payload: TerminalRunRequest) -> TerminalRunResponse:
+        """Execute safe developer tool commands in the workspace root."""
+        try:
+            res = workspace.run_command(payload.command)
+            return TerminalRunResponse(**res)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # -- Artifacts ------------------------------------------------------------
 
     @app.get("/api/artifacts", response_model=list[ArtifactView])
     def list_artifacts() -> list[ArtifactView]:
@@ -206,7 +385,7 @@ def create_app(config: Any = None, *, runner: TaskRunner | None = None) -> FastA
 
     @app.get("/api/artifacts/{relative_path:path}", include_in_schema=False)
     def get_artifact(relative_path: str) -> FileResponse:
-        """Serve one artifact, or refuse a path outside the output directory."""
+        """Serve one artifact from output directory."""
         try:
             path = runner.resolve_artifact(relative_path)
         except ArtifactError as exc:
@@ -214,12 +393,22 @@ def create_app(config: Any = None, *, runner: TaskRunner | None = None) -> FastA
         media_type, _ = mimetypes.guess_type(path.name)
         return FileResponse(path, media_type=media_type or "application/octet-stream")
 
+    # -- Exception Handlers ---------------------------------------------------
+
     @app.exception_handler(ArtifactError)
     def _artifact_error(_request: Request, exc: ArtifactError) -> JSONResponse:
-        """Render a refused artifact as the shared error body."""
+        """Render refused artifact as shared error body."""
         return JSONResponse(
             status_code=400,
             content=ErrorView(code="ARTIFACT_INVALID", message=str(exc)).model_dump(),
+        )
+
+    @app.exception_handler(SecurityError)
+    def _security_error(_request: Request, exc: SecurityError) -> JSONResponse:
+        """Render security rejection as 403."""
+        return JSONResponse(
+            status_code=403,
+            content=ErrorView(code="ACCESS_DENIED", message=str(exc)).model_dump(),
         )
 
     return app
@@ -231,11 +420,7 @@ def create_app(config: Any = None, *, runner: TaskRunner | None = None) -> FastA
 
 
 def _lifespan(runner: TaskRunner) -> Any:
-    """Build the app lifespan: shut the worker down when the server stops.
-
-    A task thread must never outlive the process it belongs to, and shutdown must
-    wait for the in-flight run rather than abandon it (SPEC-005 § 1.2 cleanup).
-    """
+    """Build app lifespan: cleanly shut the worker down."""
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -248,85 +433,91 @@ def _lifespan(runner: TaskRunner) -> Any:
 
 
 def _version() -> str:
-    """The package version, or ``"0"`` when metadata is unavailable."""
+    """Package version or fallback."""
     try:
         import agent_harness
 
-        return str(getattr(agent_harness, "__version__", "0"))
-    except Exception:  # noqa: BLE001 - never fail a response over a version string
-        return "0"
-
-
-def _cfg(config: Any, dotted: str, default: Any) -> Any:
-    """Read a dotted config value with a default, tolerating an absent section."""
-    getter = getattr(config, "get", None)
-    if callable(getter):
-        try:
-            value = getter(dotted)
-        except Exception:  # noqa: BLE001 - an unknown path is not an error here
-            value = None
-        if value is not None:
-            return value
-    section, _, key = dotted.partition(".")
-    holder = getattr(config, section, None)
-    return getattr(holder, key, default) if holder is not None else default
+        return str(getattr(agent_harness, "__version__", "0.1.0"))
+    except Exception:
+        return "0.1.0"
 
 
 def _api_key_configured(config: Any) -> bool:
-    """Whether the configured provider's key is present, by *name* only."""
+    """True when the configured LLM API key environment variable is set."""
+    env_name = _cfg(config, "llm.api_key_env", "OPENAI_API_KEY")
+    if not isinstance(env_name, str) or not env_name.strip():
+        return False
     import os
 
-    env_name = str(_cfg(config, "llm.api_key_env", "") or "")
-    if env_name:
-        return bool(os.environ.get(env_name))
-    provider = str(_cfg(config, "llm.provider", ""))
-    return bool(os.environ.get(f"{provider.upper()}_API_KEY"))
+    return bool(os.environ.get(env_name.strip(), "").strip())
 
 
-def _require_task(runner: TaskRunner, task_id: str) -> Task:
-    """Fetch a task or raise the API's 404."""
-    task = runner.get(task_id)
-    if task is None:
-        raise _not_found(task_id)
-    return task
-
-
-def _not_found(task_id: str) -> HTTPException:
-    """Build the shared 404."""
-    return HTTPException(
-        status_code=404,
-        detail=ErrorView(
-            code="TASK_NOT_FOUND", message=f"no task with id {task_id!r}"
-        ).model_dump(),
-    )
+def _cfg(config: Any, dotted: str, default: Any = None) -> Any:
+    """Read a dotted path from Config or dict."""
+    if config is None:
+        return default
+    current = config
+    for part in dotted.split("."):
+        if isinstance(current, dict):
+            current = current.get(part)
+        else:
+            current = getattr(current, part, None)
+        if current is None:
+            return default
+    return current
 
 
 def _bad_request(code: str, message: str) -> HTTPException:
-    """Build the shared 400."""
-    return HTTPException(
-        status_code=400, detail=ErrorView(code=code, message=message).model_dump()
-    )
+    """Build a 400 error matching ErrorView."""
+    return HTTPException(status_code=400, detail={"code": code, "message": message})
+
+
+def _not_found(code: str, message: str) -> HTTPException:
+    """Build a 404 error matching ErrorView."""
+    return HTTPException(status_code=404, detail={"code": code, "message": message})
+
+
+def _require_task(runner: TaskRunner, task_id: str) -> Task:
+    """Return task or raise 404."""
+    task = runner.get(task_id)
+    if task is None:
+        raise _not_found("TASK_NOT_FOUND", f"task {task_id!r} does not exist")
+    return task
 
 
 def _summary(task: Task) -> TaskSummary:
-    """Project a task onto its list-row view."""
+    """Project task to list row."""
     return TaskSummary(
         id=task.id,
         prompt=task.prompt,
-        status=task.status,  # type: ignore[arg-type]
+        status=task.status,
         created_at=task.created_at,
         started_at=task.started_at,
         finished_at=task.finished_at,
         error=task.error,
         event_count=len(task.events),
+        phase=task.phase,
+        checkpoint=CheckpointView(**task.checkpoint) if task.checkpoint else None,
     )
 
 
 def _detail(task: Task) -> TaskDetail:
-    """Project a task onto the detail view."""
+    """Project task to detail view."""
     return TaskDetail(
-        **_summary(task).model_dump(),
-        steps=[StepView(**step) for step in task.steps],
+        id=task.id,
+        prompt=task.prompt,
+        status=task.status,
+        created_at=task.created_at,
+        started_at=task.started_at,
+        finished_at=task.finished_at,
+        error=task.error,
+        event_count=len(task.events),
+        phase=task.phase,
+        checkpoint=CheckpointView(**task.checkpoint) if task.checkpoint else None,
+        roadmap=[RoadmapItemView(**item) for item in task.roadmap],
+        active_tool=task.active_tool,
+        active_files=task.active_files,
+        steps=[StepView(**s) for s in task.steps],
         metrics=MetricsView(**task.metrics) if task.metrics else None,
         final_output=task.final_output,
         files_created=task.files_created,
@@ -336,7 +527,7 @@ def _detail(task: Task) -> TaskDetail:
 
 
 def _event_view(event: dict[str, Any]) -> EventView:
-    """Project a stored event onto the wire shape."""
+    """Project stored event to EventView."""
     return EventView(
         seq=int(event.get("seq", 0)),
         at=str(event.get("at", "")),
@@ -348,23 +539,7 @@ def _event_view(event: dict[str, Any]) -> EventView:
 async def _event_stream(
     runner: TaskRunner, task_id: str, since: int, request: Request
 ) -> AsyncIterator[str]:
-    """Yield SSE frames for one task until it finishes or the client leaves.
-
-    The event log is the queue: each pass reads with a cursor, and when there is
-    nothing new the loop blocks briefly through :meth:`TaskRunner.wait_for_event`
-    (which releases the event loop for the duration) before emitting a
-    keep-alive comment. That keeps one worker thread per open tab without
-    polling the log in a hot loop.
-
-    Args:
-        runner: the task service.
-        task_id: the task being watched.
-        since: the client's starting cursor.
-        request: the inbound request, used for the disconnect probe.
-
-    Yields:
-        SSE frames: ``event: <kind>``, a JSON ``data:`` line, then a blank line.
-    """
+    """Yield SSE frames for one task until it finishes or client leaves."""
     cursor = since
     while True:
         if await request.is_disconnected():
@@ -398,19 +573,10 @@ async def _event_stream(
 
 
 def _list_tools(runner: TaskRunner) -> list[dict[str, Any]]:
-    """Read the registry's descriptors through a throwaway harness.
-
-    The registry is built lazily by the harness (SPEC-005 § 1.1 step 4) and
-    includes plugin tools, so asking the harness is the only way to answer with
-    the truth; a build failure returns an empty list rather than a 500, because
-    the tools panel is informational.
-    """
+    """Read registry's descriptors through throwaway harness."""
     harness_module = importlib.import_module("agent_harness.harness")
     logging_module = importlib.import_module("agent_harness.logging")
     try:
-        # A throwaway harness that must not spam the server console with the
-        # startup warnings a *real* run should show: the tools panel is a read,
-        # not a run (SPEC-005 § 4 warnings belong to the UI's own run path).
         harness = harness_module.AgentHarness(
             runner.config, logger=_quiet_logger(logging_module, runner.config)
         )
@@ -419,26 +585,17 @@ def _list_tools(runner: TaskRunner) -> list[dict[str, Any]]:
         finally:
             with contextlib.suppress(Exception):
                 harness.close()
-    except Exception:  # noqa: BLE001 - informational endpoint, never fatal
+    except Exception:
         return []
 
 
 def _quiet_logger(logging_module: Any, config: Any) -> Any:
-    """A logger whose console sink goes nowhere, used where warnings are noise.
-
-    ``StructuredLogger`` writes to ``console_stream`` when the config enables the
-    console; pointing that stream at an in-memory buffer keeps the HTTP read path
-    silent without touching the user's log level or the on-disk sink.
-    """
+    """Logger whose console sink goes nowhere."""
     return logging_module.StructuredLogger(config, console_stream=io.StringIO())
 
 
 def _plugin_error_count(config: Any) -> int:
-    """How many plugins failed to load, without building a harness.
-
-    Reads the plugin directories directly so the header stays honest even when
-    the registry cannot be built (for example with no credentials configured).
-    """
+    """How many plugins failed to load."""
     try:
         loader = importlib.import_module("agent_harness.plugins.loader")
         dirs = _cfg(config, "plugins.dirs", []) or []
@@ -449,21 +606,21 @@ def _plugin_error_count(config: Any) -> int:
         )
         del tools
         return len(errors)
-    except Exception:  # noqa: BLE001 - informational only
+    except Exception:
         return 0
 
 
 def _as_list(value: Any) -> list[str]:
-    """Coerce a config value that should be a list of strings."""
+    """Coerce value to list of strings."""
     if isinstance(value, (list, tuple)):
         return [str(item) for item in value]
     return []
 
 
 def app_for_script() -> FastAPI:
-    """Factory used by ``uvicorn agent_harness.web.app:app``-style invocations."""
+    """Factory used by ``uvicorn agent_harness.web.app:app``."""
     return create_app()
 
 
-if sys.version_info < (3, 9):  # pragma: no cover - declared in pyproject
+if sys.version_info < (3, 9):
     raise RuntimeError("the web UI requires Python 3.9+")
